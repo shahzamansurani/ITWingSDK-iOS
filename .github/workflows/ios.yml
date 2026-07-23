@@ -1,0 +1,20 @@
+name: iOS SDK
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve package
+        run: xcodebuild -resolvePackageDependencies
+      - name: Build for iOS Simulator
+        run: >
+          xcodebuild
+          -scheme ITWingSDK
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build
