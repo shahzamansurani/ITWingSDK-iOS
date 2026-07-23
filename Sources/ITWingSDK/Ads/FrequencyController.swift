@@ -7,22 +7,24 @@ final class FrequencyController {
 
     func canShow(_ placement: AdPlacementConfig, countTrigger: Bool = false) -> Bool {
         guard placement.enabled else { return false }
+        let key = frequencyKey(placement)
         if countTrigger {
-            let interval = placement.triggerInterval ?? 1
-            let next = (triggerCounts[placement.name] ?? 0) + 1
-            triggerCounts[placement.name] = next >= interval ? 0 : next
-            guard next >= interval else { return false }
+            let interval = max(1, placement.triggerInterval ?? 1)
+            let current = triggerCounts[key] ?? 0
+            let shouldShow = current == 0 || current % interval == 0
+            triggerCounts[key] = current + 1
+            guard shouldShow else { return false }
         }
 
         if let cooldown = placement.cooldownSeconds, cooldown > 0,
-           let last = lastShown[placement.name],
+           let last = lastShown[key],
            Date().timeIntervalSince(last) < TimeInterval(cooldown) {
             return false
         }
 
         // The control plane and Android SDK define 0 as unlimited.
         if let cap = placement.sessionCap, cap > 0,
-           (sessionCounts[placement.name] ?? 0) >= cap {
+           (sessionCounts[key] ?? 0) >= cap {
             return false
         }
 
@@ -30,8 +32,19 @@ final class FrequencyController {
     }
 
     func markShown(_ placement: AdPlacementConfig) {
-        sessionCounts[placement.name] = (sessionCounts[placement.name] ?? 0) + 1
-        lastShown[placement.name] = Date()
+        let key = frequencyKey(placement)
+        sessionCounts[key] = (sessionCounts[key] ?? 0) + 1
+        lastShown[key] = Date()
+    }
+
+    func refundTrigger(_ placement: AdPlacementConfig) {
+        let key = frequencyKey(placement)
+        triggerCounts[key] = max(0, (triggerCounts[key] ?? 0) - 1)
+    }
+
+    private func frequencyKey(_ placement: AdPlacementConfig) -> String {
+        placement.format.lowercased() == "interstitial"
+            ? "format:interstitial"
+            : "placement:\(placement.name)"
     }
 }
-

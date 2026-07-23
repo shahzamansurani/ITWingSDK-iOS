@@ -13,6 +13,7 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
     private var lastLoadAttemptAt: [String: Date] = [:]
     private let minimumLoadInterval: TimeInterval = 20
     private var observer: NSObjectProtocol?
+    private var fullScreenToken: UUID?
 
     init(configProvider: @escaping () -> ITWingConfig) {
         self.configProvider = configProvider
@@ -80,12 +81,14 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
         }
 
         guard let ad else {
+            frequency.refundTrigger(placement)
             load()
             onComplete?()
             return
         }
 
         guard let root = viewController ?? UIApplication.shared.itwingTopViewController() else {
+            frequency.refundTrigger(placement)
             onComplete?()
             return
         }
@@ -95,9 +98,16 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
               !root.isBeingPresented,
               !root.isBeingDismissed,
               root.transitionCoordinator == nil else {
+            frequency.refundTrigger(placement)
             onComplete?()
             return
         }
+        guard let token = FullScreenAdCoordinator.shared.tryBegin() else {
+            frequency.refundTrigger(placement)
+            onComplete?()
+            return
+        }
+        fullScreenToken = token
         isShowing = true
         pendingCompletion = onComplete
         activePlacementName = placement.name
@@ -113,6 +123,8 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
         }
         activePlacementName = nil
         isShowing = false
+        FullScreenAdCoordinator.shared.end(fullScreenToken)
+        fullScreenToken = nil
         let completion = pendingCompletion
         pendingCompletion = nil
         completion?()
@@ -125,6 +137,8 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
         }
         activePlacementName = nil
         isShowing = false
+        FullScreenAdCoordinator.shared.end(fullScreenToken)
+        fullScreenToken = nil
         let completion = pendingCompletion
         pendingCompletion = nil
         completion?()

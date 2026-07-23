@@ -1,6 +1,25 @@
 import GoogleMobileAds
 import UIKit
 
+/// Fixed inline-ad heights shared by SDK renderers and host layouts.
+///
+/// Native sizes reserve enough space for attribution, AdChoices, and a
+/// MediaView that is never smaller than 120 × 120 points.
+public enum ITWingAdLayout {
+    public static let bannerHeight: CGFloat = 64
+    public static let nativeSmallHeight: CGFloat = 190
+    public static let nativeLargeHeight: CGFloat = 280
+
+    public static func nativeHeight(for placementName: String) -> CGFloat {
+        let placement = ITWingSDK.config.ads.placements.first { $0.name == placementName }
+        let template = ((placement?.metadata?["native_type"] ?? nil)
+            ?? (placement?.metadata?["native_template"] ?? nil)
+            ?? (placementName.lowercased().contains("small") ? "small" : "large"))
+            .lowercased()
+        return template == "small" ? nativeSmallHeight : nativeLargeHeight
+    }
+}
+
 open class ITWingBannerView: UIView, BannerViewDelegate {
     public var placementName: String = "banner_adaptive" {
         didSet { loadAdIfNeeded() }
@@ -34,6 +53,10 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
         }
     }
 
+    open override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: ITWingAdLayout.bannerHeight)
+    }
+
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     open override func didMoveToWindow() {
@@ -54,26 +77,17 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
 
     public func loadAdIfNeeded() {
         guard window != nil, !hasRequested, ITWingSDK.canRequestAds() else { return }
+        if InlineAdSafetyGate.shared.suppressInline(reload: { [weak self] in self?.loadAdIfNeeded() }) {
+            return
+        }
         let bannerPlacements = ITWingSDK.config.ads.placements.filter { $0.enabled && $0.format == "banner" }
         guard let placement = bannerPlacements.first(where: { $0.name == placementName }) ?? bannerPlacements.first else { return }
         guard AdLoadBackoff.canRequest(placement) else {
             if let fallback = placement.fallbackCustomAd(in: ITWingSDK.config) {
-                let customView = ITWingCustomNativeAdView()
-                customView.translatesAutoresizingMaskIntoConstraints = false
-                customView.format = "banner"
-                customView.nativeType = "small"
-                customView.placementName = placement.name
-                customView.placementMetadata = placement.metadata ?? [:]
-                customView.configuredAd = fallback
-                addSubview(customView)
-                NSLayoutConstraint.activate([
-                    customView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                    customView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                    customView.topAnchor.constraint(equalTo: topAnchor),
-                    customView.bottomAnchor.constraint(equalTo: bottomAnchor),
-                ])
                 hasRequested = true
                 isHidden = false
+                showShimmer(kind: .banner)
+                presentCustomBanner(fallback, placement: placement)
                 return
             }
             isHidden = true
@@ -82,23 +96,14 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
         isHidden = false
         if let customAd = placement.selectedCustomAd(in: ITWingSDK.config) {
             hasRequested = true
-            let customView = ITWingCustomNativeAdView()
-            customView.translatesAutoresizingMaskIntoConstraints = false
-            customView.format = "banner"
-            customView.nativeType = "small"
-            customView.placementName = placement.name
-            customView.placementMetadata = placement.metadata ?? [:]
-            customView.configuredAd = customAd
-            addSubview(customView)
-            NSLayoutConstraint.activate([
-                customView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                customView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                customView.topAnchor.constraint(equalTo: topAnchor),
-                customView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            ])
+            showShimmer(kind: .banner)
+            presentCustomBanner(customAd, placement: placement)
             return
         }
-        guard let unit = placement.units.first(where: { $0.network == "admob" }) else { return }
+        guard let unit = placement.units.first(where: { $0.network == "admob" }) else {
+            isHidden = true
+            return
+        }
         guard let root = UIApplication.shared.itwingVisibleViewController else { return }
 
         hasRequested = true
@@ -111,10 +116,12 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
         banner.delegate = self
         banner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(banner)
+        let bannerSize = size.size
         NSLayoutConstraint.activate([
             banner.centerXAnchor.constraint(equalTo: centerXAnchor),
-            banner.topAnchor.constraint(equalTo: topAnchor),
-            banner.bottomAnchor.constraint(equalTo: bottomAnchor),
+            banner.centerYAnchor.constraint(equalTo: centerYAnchor),
+            banner.widthAnchor.constraint(equalToConstant: bannerSize.width),
+            banner.heightAnchor.constraint(equalToConstant: bannerSize.height),
         ])
         bannerView = banner
         AnalyticsClient.shared.track("ad_requested", properties: ["placement": placementName, "format": "banner", "network": "admob"])
@@ -126,42 +133,59 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
         if let placement = ITWingSDK.config.ads.placements.first(where: { $0.name == placementName }) {
             AdLoadBackoff.recordSuccess(placement)
         }
+    }
+
+    public func bannerViewDidRecordImpression(_ bannerView: BannerView) {
         AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "banner", "network": "admob"])
     }
 
     public func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
-        removeShimmer()
         hasRequested = false
         bannerView.removeFromSuperview()
         self.bannerView = nil
-        isHidden = true
         if let placement = ITWingSDK.config.ads.placements.first(where: { $0.name == placementName }) {
             AdLoadBackoff.recordFailure(placement, error: error)
             if let fallback = placement.fallbackCustomAd(in: ITWingSDK.config) {
-                let customView = ITWingCustomNativeAdView()
-                customView.translatesAutoresizingMaskIntoConstraints = false
-                customView.format = "banner"
-                customView.nativeType = "small"
-                customView.placementName = placement.name
-                customView.placementMetadata = placement.metadata ?? [:]
-                customView.configuredAd = fallback
-                addSubview(customView)
-                NSLayoutConstraint.activate([
-                    customView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                    customView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                    customView.topAnchor.constraint(equalTo: topAnchor),
-                    customView.bottomAnchor.constraint(equalTo: bottomAnchor),
-                ])
                 hasRequested = true
                 isHidden = false
+                presentCustomBanner(fallback, placement: placement)
                 return
             }
         }
+        removeShimmer()
+        isHidden = true
         AnalyticsClient.shared.track("ad_load_failed", properties: ["placement": placementName, "format": "banner", "network": "admob"])
     }
 
+    private func presentCustomBanner(_ ad: ITWingCustomAd, placement: AdPlacementConfig) {
+        let customView = ITWingCustomNativeAdView()
+        customView.translatesAutoresizingMaskIntoConstraints = false
+        customView.alpha = 0
+        customView.format = "banner"
+        customView.nativeType = "small"
+        customView.placementName = placement.name
+        customView.placementMetadata = placement.metadata ?? [:]
+        customView.configuredAd = ad
+        customView.onReady = { [weak self, weak customView] in
+            guard let self, let customView, customView.superview === self else { return }
+            self.subviews.filter { $0 !== customView }.forEach { $0.removeFromSuperview() }
+            customView.alpha = 0
+            UIView.animate(withDuration: 0.25) { customView.alpha = 1 }
+        }
+        addSubview(customView)
+        NSLayoutConstraint.activate([
+            customView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            customView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            customView.topAnchor.constraint(equalTo: topAnchor),
+            customView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        if let shimmer = viewWithTag(ITWingAdShimmerView.viewTag) {
+            bringSubviewToFront(shimmer)
+        }
+    }
+
     private func showShimmer(kind: ITWingAdShimmerView.Kind) {
-        removeShimmer()
+        if viewWithTag(ITWingAdShimmerView.viewTag) != nil { return }
         let shimmer = ITWingAdShimmerView(kind: kind)
         shimmer.tag = ITWingAdShimmerView.viewTag
         shimmer.translatesAutoresizingMaskIntoConstraints = false
@@ -182,7 +206,10 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
 
 open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate {
     public var placementName: String = "native_large" {
-        didSet { loadAdIfNeeded() }
+        didSet {
+            invalidateIntrinsicContentSize()
+            loadAdIfNeeded()
+        }
     }
 
     private var adLoader: AdLoader?
@@ -207,11 +234,19 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
                 self.unloadAd()
+                self.invalidateIntrinsicContentSize()
                 if ITWingSDK.canRequestAds() {
                     self.loadAdIfNeeded()
                 }
             }
         }
+    }
+
+    open override var intrinsicContentSize: CGSize {
+        CGSize(
+            width: UIView.noIntrinsicMetric,
+            height: ITWingAdLayout.nativeHeight(for: placementName)
+        )
     }
 
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
@@ -234,6 +269,9 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
 
     public func loadAdIfNeeded() {
         guard window != nil, !hasRequested, ITWingSDK.canRequestAds() else { return }
+        if InlineAdSafetyGate.shared.suppressInline(reload: { [weak self] in self?.loadAdIfNeeded() }) {
+            return
+        }
         let enabledPlacements = ITWingSDK.config.ads.placements.filter(\.enabled)
         let nativePlacements = enabledPlacements.filter { $0.format == "native" }
         guard let placement = enabledPlacements.first(where: { $0.name == placementName })
@@ -242,6 +280,7 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         }
         guard AdLoadBackoff.canRequest(placement) else {
             if let fallback = placement.fallbackCustomAd(in: ITWingSDK.config) {
+                showShimmer(for: placement)
                 renderCustomAd(fallback, placement: placement)
                 isHidden = false
                 return
@@ -268,17 +307,29 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
 
         guard placement.format == "native" else { return }
         if placement.selectedCustomAd(in: ITWingSDK.config) != nil {
+            showShimmer(for: placement)
             renderCustom(placement)
             return
         }
 
         guard let unit = placement.units.first(where: { $0.network == "admob" }),
-              let root = UIApplication.shared.itwingVisibleViewController else { return }
+              let root = UIApplication.shared.itwingVisibleViewController else {
+            isHidden = true
+            return
+        }
 
         hasRequested = true
-        showShimmer()
-        let options = NativeAdMediaAdLoaderOptions()
-        let loader = AdLoader(adUnitID: unit.adUnitId, rootViewController: root, adTypes: [.native], options: [options])
+        showShimmer(for: placement)
+        let mediaOptions = NativeAdMediaAdLoaderOptions()
+        mediaOptions.mediaAspectRatio = .landscape
+        let viewOptions = NativeAdViewAdOptions()
+        viewOptions.preferredAdChoicesPosition = .topRightCorner
+        let loader = AdLoader(
+            adUnitID: unit.adUnitId,
+            rootViewController: root,
+            adTypes: [.native],
+            options: [mediaOptions, viewOptions]
+        )
         loader.delegate = self
         adLoader = loader
         AnalyticsClient.shared.track("ad_requested", properties: ["placement": placementName, "format": "native", "network": "admob"])
@@ -288,15 +339,24 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
     public func adLoader(_ adLoader: AdLoader, didReceive nativeAd: NativeAd) {
         NSLog("[ITWingSDK] native ad loaded placement=%@", placementName)
         nativeAd.delegate = self
-        guard let placement = ITWingSDK.config.ads.placements.first(where: { $0.name == placementName }) else { return }
+        guard let placement = ITWingSDK.config.ads.placements.first(where: { $0.name == placementName }) else {
+            adLoader.delegate = nil
+            self.adLoader = nil
+            hasRequested = false
+            removeShimmer()
+            isHidden = true
+            return
+        }
         AdLoadBackoff.recordSuccess(placement)
         render(nativeAd, placement: placement)
+    }
+
+    public func nativeAdDidRecordImpression(_ nativeAd: NativeAd) {
         AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "native", "network": "admob"])
     }
 
     public func adLoader(_ adLoader: AdLoader, didFailToReceiveAdWithError error: Error) {
         NSLog("[ITWingSDK] native ad failed placement=%@ error=%@", placementName, String(describing: error))
-        removeShimmer()
         AnalyticsClient.shared.track("ad_load_failed", properties: ["placement": placementName, "format": "native", "network": "admob"])
         if let placement = ITWingSDK.config.ads.placements.first(where: { $0.name == placementName }) {
             AdLoadBackoff.recordFailure(placement, error: error)
@@ -322,44 +382,41 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         hasRequested = false
         adLoader.delegate = nil
         self.adLoader = nil
+        removeShimmer()
         isHidden = true
     }
 
     private func renderCustom(_ placement: AdPlacementConfig) {
-        adLoader?.delegate = nil
-        adLoader = nil
-        subviews.forEach { $0.removeFromSuperview() }
-        hasRequested = true
-        let customView = ITWingCustomNativeAdView()
-        customView.translatesAutoresizingMaskIntoConstraints = false
-        customView.format = "native"
-        customView.configuredAd = placement.selectedCustomAd(in: ITWingSDK.config)
-        customView.placementMetadata = placement.metadata ?? [:]
-        customView.nativeType = ((placement.metadata?["native_type"] ?? nil)
-            ?? (placement.metadata?["native_template"] ?? nil)) ?? "large"
-        customView.placementName = placement.name
-        addSubview(customView)
-        NSLayoutConstraint.activate([
-            customView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            customView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            customView.topAnchor.constraint(equalTo: topAnchor),
-            customView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        guard let customAd = placement.selectedCustomAd(in: ITWingSDK.config) else {
+            removeShimmer()
+            hasRequested = false
+            isHidden = true
+            return
+        }
+        renderCustomAd(customAd, placement: placement)
     }
 
     private func renderCustomAd(_ ad: ITWingCustomAd, placement: AdPlacementConfig) {
         adLoader?.delegate = nil
         adLoader = nil
-        subviews.forEach { $0.removeFromSuperview() }
+        subviews.filter { $0.tag != ITWingAdShimmerView.viewTag }.forEach { $0.removeFromSuperview() }
         hasRequested = true
         let customView = ITWingCustomNativeAdView()
         customView.translatesAutoresizingMaskIntoConstraints = false
+        customView.alpha = 0
         customView.format = "native"
         customView.configuredAd = ad
         customView.placementMetadata = placement.metadata ?? [:]
         customView.nativeType = ((placement.metadata?["native_type"] ?? nil)
             ?? (placement.metadata?["native_template"] ?? nil)) ?? "large"
         customView.placementName = placement.name
+        customView.onReady = { [weak self, weak customView] in
+            guard let self, let customView, customView.superview === self else { return }
+            self.subviews.filter { $0 !== customView }.forEach { $0.removeFromSuperview() }
+            self.isHidden = false
+            customView.alpha = 0
+            UIView.animate(withDuration: 0.25) { customView.alpha = 1 }
+        }
         addSubview(customView)
         NSLayoutConstraint.activate([
             customView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -367,6 +424,9 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
             customView.topAnchor.constraint(equalTo: topAnchor),
             customView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        if let shimmer = viewWithTag(ITWingAdShimmerView.viewTag) {
+            bringSubviewToFront(shimmer)
+        }
     }
 
     private func customFallbackPlacement() -> AdPlacementConfig? {
@@ -398,13 +458,6 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         nativeView.translatesAutoresizingMaskIntoConstraints = false
         nativeView.clipsToBounds = false
         addSubview(nativeView)
-        let adChoices = AdChoicesView()
-        adChoices.translatesAutoresizingMaskIntoConstraints = false
-        adChoices.clipsToBounds = false
-        adChoices.accessibilityIdentifier = "ad_choices"
-        nativeView.addSubview(adChoices)
-        nativeView.adChoicesView = adChoices
-
         let metadata = placement.metadata ?? [:]
         let card = ITWingNativeGradientCard()
         card.translatesAutoresizingMaskIntoConstraints = false
@@ -428,11 +481,12 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         header.spacing = 10
         header.alignment = .center
         header.isLayoutMarginsRelativeArrangement = true
-        header.layoutMargins = UIEdgeInsets(top: 0, left: 25, bottom: 0, right: 10)
+        header.layoutMargins = UIEdgeInsets(top: 0, left: 25, bottom: 0, right: 40)
         stack.addArrangedSubview(header)
 
         let icon = UIImageView()
         icon.image = ad.icon?.image
+        icon.isHidden = ad.icon == nil
         icon.contentMode = .scaleAspectFit
         icon.layer.cornerRadius = 7
         icon.clipsToBounds = true
@@ -481,6 +535,7 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         let rating = UILabel()
         let ratingValue = ad.starRating?.doubleValue ?? 0
         rating.text = ratingValue > 0 ? starText(ratingValue) : nil
+        rating.isHidden = ad.starRating == nil
         rating.font = .systemFont(ofSize: 11, weight: .semibold)
         rating.textColor = UIColor(red: 250 / 255, green: 204 / 255, blue: 21 / 255, alpha: 1)
         rating.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -508,13 +563,15 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         let mediaView = MediaView()
         mediaView.mediaContent = ad.mediaContent
         mediaView.clipsToBounds = true
-        mediaView.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+        mediaView.contentMode = .scaleAspectFill
+        mediaView.heightAnchor.constraint(equalToConstant: 120).isActive = true
         mediaView.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         stack.addArrangedSubview(mediaView)
         nativeView.mediaView = mediaView
 
         let cta = UIButton(type: .system)
-        cta.setTitle(ad.callToAction ?? "Open", for: .normal)
+        cta.setTitle(ad.callToAction, for: .normal)
+        cta.isHidden = ad.callToAction == nil
         cta.backgroundColor = ITWingSDK.uiColor("primary", defaultValue: .systemBlue)
         cta.setTitleColor(metadata.itwingColor("native_cta_text_color", fallback: ITWingSDK.uiColor("cta_text_color", defaultValue: .white)), for: .normal)
         cta.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
@@ -531,13 +588,11 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         badge.textAlignment = .center
         badge.font = .systemFont(ofSize: 11, weight: .bold)
         badge.textColor = .white
-        badge.backgroundColor = .clear
+        badge.backgroundColor = ITWingSDK.uiColor("primary", defaultValue: .systemGreen)
+        badge.layer.cornerRadius = 4
+        badge.clipsToBounds = true
         badge.textColor = metadata.itwingColor("native_ad_label_text_color", fallback: ITWingSDK.uiColor("ad_label_text_color", defaultValue: .white))
-        let badgeBackground = ITWingAdBadgeBackground()
-        badgeBackground.translatesAutoresizingMaskIntoConstraints = false
-        badgeBackground.color = ITWingSDK.uiColor("primary", defaultValue: .systemGreen)
-        card.addSubview(badgeBackground)
-        card.addSubview(badge)
+        nativeView.addSubview(badge)
         NSLayoutConstraint.activate([
             nativeView.leadingAnchor.constraint(equalTo: leadingAnchor),
             nativeView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -551,21 +606,12 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
             stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
             stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
             stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12),
-            badge.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
-            badge.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
-            badge.widthAnchor.constraint(equalToConstant: 25),
+            badge.leadingAnchor.constraint(equalTo: nativeView.leadingAnchor, constant: 8),
+            badge.topAnchor.constraint(equalTo: nativeView.topAnchor, constant: 8),
+            badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 25),
             badge.heightAnchor.constraint(equalToConstant: 20),
-            badgeBackground.leadingAnchor.constraint(equalTo: badge.leadingAnchor),
-            badgeBackground.trailingAnchor.constraint(equalTo: badge.trailingAnchor),
-            badgeBackground.topAnchor.constraint(equalTo: badge.topAnchor),
-            badgeBackground.bottomAnchor.constraint(equalTo: badge.bottomAnchor),
-            adChoices.topAnchor.constraint(equalTo: nativeView.topAnchor, constant: 6),
-            adChoices.trailingAnchor.constraint(equalTo: nativeView.trailingAnchor, constant: -6),
-            adChoices.widthAnchor.constraint(equalToConstant: 30),
-            adChoices.heightAnchor.constraint(equalToConstant: 30),
         ])
-        card.bringSubviewToFront(badge)
-        nativeView.bringSubviewToFront(adChoices)
+        nativeView.bringSubviewToFront(badge)
         nativeView.layoutIfNeeded()
         nativeView.nativeAd = ad
         nativeView.alpha = 0
@@ -580,10 +626,6 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         let nativeView = NativeAdView()
         nativeView.translatesAutoresizingMaskIntoConstraints = false
         nativeView.clipsToBounds = false
-        let adChoices = AdChoicesView()
-        adChoices.translatesAutoresizingMaskIntoConstraints = false
-        adChoices.clipsToBounds = false
-        adChoices.accessibilityIdentifier = "ad_choices"
         let card = ITWingNativeGradientCard()
         card.translatesAutoresizingMaskIntoConstraints = false
         card.layer.cornerRadius = 28
@@ -595,8 +637,6 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         }
         addSubview(nativeView)
         nativeView.addSubview(card)
-        nativeView.addSubview(adChoices)
-        nativeView.adChoicesView = adChoices
 
         let headlineColor = metadata.itwingColor(
             ["native_headline_text_color", "headline_text_color"],
@@ -610,13 +650,14 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
 
         let body = UILabel()
         body.text = ad.body
+        body.isHidden = ad.body == nil
         body.font = .systemFont(ofSize: 12)
         body.textColor = bodyColor
         body.numberOfLines = 3
         nativeView.bodyView = body
         let bodyRow = UIStackView(arrangedSubviews: [body])
         bodyRow.isLayoutMarginsRelativeArrangement = true
-        bodyRow.layoutMargins = UIEdgeInsets(top: 0, left: 32, bottom: 0, right: 0)
+        bodyRow.layoutMargins = UIEdgeInsets(top: 0, left: 32, bottom: 0, right: 38)
 
         let headline = UILabel()
         headline.text = ad.headline
@@ -626,6 +667,7 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         nativeView.headlineView = headline
 
         let icon = UIImageView(image: ad.icon?.image)
+        icon.isHidden = ad.icon == nil
         icon.contentMode = .scaleAspectFit
         icon.clipsToBounds = true
         icon.widthAnchor.constraint(equalToConstant: 40).isActive = true
@@ -638,6 +680,7 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         let rating = UILabel()
         let ratingValue = ad.starRating?.doubleValue ?? 0
         rating.text = ratingValue > 0 ? starText(ratingValue) : nil
+        rating.isHidden = ad.starRating == nil
         rating.font = .systemFont(ofSize: 11, weight: .semibold)
         rating.textColor = UIColor(red: 250/255, green: 204/255, blue: 21/255, alpha: 1)
         nativeView.starRatingView = rating
@@ -658,7 +701,8 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         advertiserRow.spacing = 3
 
         let cta = UIButton(type: .system)
-        cta.setTitle(ad.callToAction ?? "Install", for: .normal)
+        cta.setTitle(ad.callToAction, for: .normal)
+        cta.isHidden = ad.callToAction == nil
         cta.backgroundColor = ITWingSDK.uiColor("primary", defaultValue: .systemBlue)
         cta.setTitleColor(metadata.itwingColor("native_cta_text_color", fallback: .white), for: .normal)
         cta.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
@@ -674,6 +718,7 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         let media = MediaView()
         media.mediaContent = ad.mediaContent
         media.clipsToBounds = true
+        media.contentMode = .scaleAspectFill
         media.heightAnchor.constraint(equalToConstant: 130).isActive = true
         media.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         nativeView.mediaView = media
@@ -695,11 +740,10 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         badge.font = .systemFont(ofSize: 11, weight: .bold)
         badge.textAlignment = .center
         badge.textColor = metadata.itwingColor("native_ad_label_text_color", fallback: .white)
-        let badgeBackground = ITWingAdBadgeBackground()
-        badgeBackground.translatesAutoresizingMaskIntoConstraints = false
-        badgeBackground.color = ITWingSDK.uiColor("primary", defaultValue: .systemGreen)
-        card.addSubview(badgeBackground)
-        card.addSubview(badge)
+        badge.backgroundColor = ITWingSDK.uiColor("primary", defaultValue: .systemGreen)
+        badge.layer.cornerRadius = 4
+        badge.clipsToBounds = true
+        nativeView.addSubview(badge)
         NSLayoutConstraint.activate([
             nativeView.leadingAnchor.constraint(equalTo: leadingAnchor),
             nativeView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -713,20 +757,12 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
             content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
             content.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
             content.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
-            badge.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
-            badge.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
+            badge.leadingAnchor.constraint(equalTo: nativeView.leadingAnchor, constant: 8),
+            badge.topAnchor.constraint(equalTo: nativeView.topAnchor, constant: 8),
             badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 25),
             badge.heightAnchor.constraint(equalToConstant: 20),
-            badgeBackground.leadingAnchor.constraint(equalTo: badge.leadingAnchor),
-            badgeBackground.trailingAnchor.constraint(equalTo: badge.trailingAnchor),
-            badgeBackground.topAnchor.constraint(equalTo: badge.topAnchor),
-            badgeBackground.bottomAnchor.constraint(equalTo: badge.bottomAnchor),
-            adChoices.topAnchor.constraint(equalTo: nativeView.topAnchor, constant: 6),
-            adChoices.trailingAnchor.constraint(equalTo: nativeView.trailingAnchor, constant: -6),
-            adChoices.widthAnchor.constraint(equalToConstant: 30),
-            adChoices.heightAnchor.constraint(equalToConstant: 30),
         ])
-        nativeView.bringSubviewToFront(adChoices)
+        nativeView.bringSubviewToFront(badge)
         nativeView.layoutIfNeeded()
         nativeView.nativeAd = ad
     }
@@ -748,9 +784,14 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
             + String(repeating: "☆", count: max(0, 5 - min(5, rounded)))
     }
 
-    private func showShimmer() {
+    private func showShimmer(for placement: AdPlacementConfig) {
+        if viewWithTag(ITWingAdShimmerView.viewTag) != nil { return }
         subviews.forEach { $0.removeFromSuperview() }
-        let shimmer = ITWingAdShimmerView(kind: .nativeLarge)
+        let template = ((placement.metadata?["native_type"] ?? nil)
+            ?? (placement.metadata?["native_template"] ?? nil)
+            ?? (placement.name.lowercased().contains("small") ? "small" : "large"))
+            .lowercased()
+        let shimmer = ITWingAdShimmerView(kind: template == "small" ? .nativeSmall : .nativeLarge)
         shimmer.tag = ITWingAdShimmerView.viewTag
         shimmer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(shimmer)
@@ -836,7 +877,7 @@ private extension Dictionary where Key == String, Value == String? {
 }
 
 private final class ITWingAdShimmerView: UIView {
-    enum Kind { case banner, nativeLarge }
+    enum Kind { case banner, nativeSmall, nativeLarge }
     static let viewTag = 918_204
     private let gradient = CAGradientLayer()
 
@@ -851,7 +892,7 @@ private final class ITWingAdShimmerView: UIView {
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
-        if kind == .nativeLarge {
+        if kind == .nativeLarge || kind == .nativeSmall {
             let header = UIStackView()
             header.axis = .horizontal
             header.alignment = .center

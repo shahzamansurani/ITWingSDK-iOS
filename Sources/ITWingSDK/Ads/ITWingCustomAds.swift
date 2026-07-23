@@ -318,15 +318,15 @@ final class ITWingCustomFullScreenAdController: UIViewController {
 
         view.addSubview(close)
         NSLayoutConstraint.activate([
-            media.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            media.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            media.topAnchor.constraint(equalTo: view.topAnchor),
-            media.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             icon.widthAnchor.constraint(equalToConstant: 42),
             icon.heightAnchor.constraint(equalToConstant: 42),
             top.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
             top.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -10),
             top.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            media.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            media.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            media.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 12),
+            media.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -12),
             close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
             close.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             close.widthAnchor.constraint(equalToConstant: 44),
@@ -337,7 +337,11 @@ final class ITWingCustomFullScreenAdController: UIViewController {
         ])
         close.alpha = 0
         close.isEnabled = false
-        media.configure(with: ad, loop: !isRewarded) { [weak self] in self?.grantRewardIfNeeded() }
+        media.configure(
+            with: ad,
+            loop: true,
+            onCompleted: { [weak self] in self?.grantRewardIfNeeded() }
+        )
         DispatchQueue.main.asyncAfter(deadline: .now() + (isRewarded ? 5 : 3)) { [weak self] in
             guard let self else { return }
             if isRewarded && !isVideo { self.grantRewardIfNeeded() }
@@ -367,6 +371,10 @@ final class ITWingCustomFullScreenAdController: UIViewController {
 }
 
 open class ITWingCustomNativeAdView: UIView {
+    /// Called once the custom ad's primary media is ready to replace a host
+    /// shimmer. This mirrors Android's preload-then-swap lifecycle.
+    public var onReady: (() -> Void)?
+
     public var placementName: String = "custom_native_large" {
         didSet { load() }
     }
@@ -382,6 +390,7 @@ open class ITWingCustomNativeAdView: UIView {
     }
 
     private var currentAd: ITWingCustomAd?
+    private var readyAdID: String?
     private let titleLabel = UILabel()
     private let bodyLabel = UILabel()
     private let imageView = UIImageView()
@@ -425,7 +434,9 @@ open class ITWingCustomNativeAdView: UIView {
     }
 
     private func render(_ ad: ITWingCustomAd) {
+        guard currentAd?.id != ad.id || subviews.isEmpty else { return }
         currentAd = ad
+        readyAdID = nil
         subviews.forEach { $0.removeFromSuperview() }
         let card = CustomNativeCard()
         card.translatesAutoresizingMaskIntoConstraints = false
@@ -479,8 +490,21 @@ open class ITWingCustomNativeAdView: UIView {
             ])
             card.bringSubviewToFront(badge)
         }
-        mediaView?.configure(with: ad)
-        ITWingSDK.trackCustomAdEvent(adId: ad.id, eventType: "impression", metadata: ["placement": placementName])
+        let markReady = { [weak self] in
+            guard let self, self.readyAdID != ad.id else { return }
+            self.readyAdID = ad.id
+            ITWingSDK.trackCustomAdEvent(
+                adId: ad.id,
+                eventType: "impression",
+                metadata: ["placement": self.placementName]
+            )
+            self.onReady?()
+        }
+        if let mediaView {
+            mediaView.configure(with: ad, onReady: markReady)
+        } else {
+            markReady()
+        }
     }
 
     private func buildLarge(_ ad: ITWingCustomAd) -> UIView {
@@ -607,10 +631,10 @@ open class ITWingCustomNativeAdView: UIView {
 
         let media = ITWingCustomMediaView()
         media.translatesAutoresizingMaskIntoConstraints = false
-        media.widthAnchor.constraint(equalToConstant: 84).isActive = true
-        // The host banner is 60pt tall and the custom card has 1pt top/bottom
-        // inset, so media must fit the remaining 58pt without breaking layout.
-        media.heightAnchor.constraint(equalToConstant: 58).isActive = true
+        // Matches Android custom_banner.xml. Keeping the media at its authored
+        // size also prevents a short host banner from stretching the artwork.
+        media.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        media.heightAnchor.constraint(equalToConstant: 50).isActive = true
         mediaView = media
 
         let advertiser = UILabel()
@@ -626,7 +650,7 @@ open class ITWingCustomNativeAdView: UIView {
         titleLabel.isHidden = normalizedHeadline?.isEmpty != false || normalizedHeadline == normalizedAdvertiser
 
         let rating = ITWingRatingView(rating: ad.brandRating, fontSize: 8)
-        configureCTA(ad, height: 18)
+        configureCTA(ad, height: 15)
         ctaButton.titleLabel?.font = .systemFont(ofSize: 8, weight: .bold)
         ctaButton.contentEdgeInsets = UIEdgeInsets(top: 1, left: 8, bottom: 1, right: 8)
 
@@ -767,10 +791,11 @@ private final class ITWingCustomMediaView: UIView {
         super.init(frame: frame)
         clipsToBounds = true
         layer.cornerRadius = 12
-        backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.35)
+        backgroundColor = .clear
         imageView.frame = bounds
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         imageView.contentMode = .scaleAspectFit
+        imageView.backgroundColor = .clear
         imageView.clipsToBounds = true
         addSubview(imageView)
         muteButton.tintColor = .white
@@ -785,7 +810,12 @@ private final class ITWingCustomMediaView: UIView {
 
     required init?(coder: NSCoder) { nil }
 
-    func configure(with ad: ITWingCustomAd, loop: Bool = true, onCompleted: @escaping () -> Void = {}) {
+    func configure(
+        with ad: ITWingCustomAd,
+        loop: Bool = true,
+        onReady: @escaping () -> Void = {},
+        onCompleted: @escaping () -> Void = {}
+    ) {
         player?.pause()
         if let loopObserver {
             NotificationCenter.default.removeObserver(loopObserver)
@@ -800,7 +830,10 @@ private final class ITWingCustomMediaView: UIView {
         let source = [ad.mediaUrl, ad.videoUrl, ad.imageUrl]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
-        guard let source, let url = URL(string: source) else { return }
+        guard let source, let url = URL(string: source) else {
+            onReady()
+            return
+        }
         let isVideo = ad.mediaType?.lowercased() == "video"
             || ad.videoUrl == source
             || ["mp4", "mov", "m4v", "webm"].contains(url.pathExtension.lowercased())
@@ -812,6 +845,7 @@ private final class ITWingCustomMediaView: UIView {
             player.actionAtItemEnd = loop ? .none : .pause
             let layer = AVPlayerLayer(player: player)
             layer.videoGravity = .resizeAspect
+            layer.backgroundColor = UIColor.clear.cgColor
             self.player = player
             playerLayer = layer
             self.layer.addSublayer(layer)
@@ -830,9 +864,24 @@ private final class ITWingCustomMediaView: UIView {
                 }
             }
             player.play()
+            guard let asset = player.currentItem?.asset else {
+                onReady()
+                return
+            }
+            asset.loadValuesAsynchronously(forKeys: ["playable"]) {
+                var error: NSError?
+                let playable = asset.statusOfValue(forKey: "playable", error: &error) == .loaded
+                DispatchQueue.main.async {
+                    if !playable {
+                        NSLog("[ITWingSDK] custom video media could not be preloaded: %@", source)
+                    }
+                    onReady()
+                }
+            }
         } else {
             MediaDiskCache.shared.loadImage(source) { [weak self] image in
                 self?.imageView.image = image
+                onReady()
             }
         }
     }

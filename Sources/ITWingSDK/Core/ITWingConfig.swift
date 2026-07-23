@@ -509,6 +509,7 @@ public struct SubscriptionProductConfig: Codable, Sendable {
     public var id: String
     public var name: String
     public var store: String
+    public var productType: String
     public var productId: String
     public var basePlanId: String?
     public var offerId: String?
@@ -517,11 +518,16 @@ public struct SubscriptionProductConfig: Codable, Sendable {
     public var currency: String?
     public var removesAds: Bool
     public var entitlements: [String: Bool]?
+    public var consumable: Bool
+    public var productDescription: String?
+    public var offerLabel: String?
+    public var formattedOriginalPrice: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case store
+        case productType = "product_type"
         case productId = "product_id"
         case basePlanId = "base_plan_id"
         case offerId = "offer_id"
@@ -530,6 +536,30 @@ public struct SubscriptionProductConfig: Codable, Sendable {
         case currency
         case removesAds = "removes_ads"
         case entitlements
+        case consumable
+        case productDescription = "description"
+        case offerLabel = "offer_label"
+        case formattedOriginalPrice = "formatted_original_price"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        store = try values.decode(String.self, forKey: .store)
+        productType = try values.decodeIfPresent(String.self, forKey: .productType) ?? "subscription"
+        productId = try values.decode(String.self, forKey: .productId)
+        basePlanId = try values.decodeIfPresent(String.self, forKey: .basePlanId)
+        offerId = try values.decodeIfPresent(String.self, forKey: .offerId)
+        billingPeriod = try values.decode(String.self, forKey: .billingPeriod)
+        price = try values.decodeIfPresent(Double.self, forKey: .price)
+        currency = try values.decodeIfPresent(String.self, forKey: .currency)
+        removesAds = try values.decodeIfPresent(Bool.self, forKey: .removesAds) ?? false
+        entitlements = try values.decodeIfPresent([String: Bool].self, forKey: .entitlements)
+        consumable = try values.decodeIfPresent(Bool.self, forKey: .consumable) ?? false
+        productDescription = try values.decodeIfPresent(String.self, forKey: .productDescription)
+        offerLabel = try values.decodeIfPresent(String.self, forKey: .offerLabel)
+        formattedOriginalPrice = try values.decodeIfPresent(String.self, forKey: .formattedOriginalPrice)
     }
 }
 

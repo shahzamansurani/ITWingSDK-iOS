@@ -17,6 +17,9 @@ struct ITWingSDKExampleApp: App {
 }
 
 enum ExampleEnvironment {
+    /// Same example application ID used by the Android SDK example.
+    static let defaultSDKKey = "itw_live_94kbqo2nFjs3nNhLpOOm3jHWv80k0JQIkHEzHLBD94Banchm"
+
     static var sdkKey: String {
         let environment = ProcessInfo.processInfo.environment["ITWING_SDK_KEY"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -25,8 +28,9 @@ enum ExampleEnvironment {
         }
         let plist = (Bundle.main.object(forInfoDictionaryKey: "ITWingSDKKey") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let plist, !plist.isEmpty, !plist.contains("$(") else { return "" }
+        guard let plist, !plist.isEmpty, !plist.contains("$(") else {
+            return defaultSDKKey
+        }
         return plist
     }
 }
-

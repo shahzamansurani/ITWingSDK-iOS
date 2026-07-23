@@ -78,10 +78,14 @@ public struct ITWingOnboardingAd: View {
             if let resolved {
                 if resolved.format == "banner" {
                     StartupBannerRepresentable(placement: resolved.placement)
-                        .frame(height: 60)
+                        .frame(height: ITWingAdLayout.bannerHeight)
                 } else {
                     StartupNativeRepresentable(placement: resolved.placement)
-                        .frame(height: resolved.isSmallNative ? 150 : 280)
+                        .frame(
+                            height: resolved.isSmallNative
+                                ? ITWingAdLayout.nativeSmallHeight
+                                : ITWingAdLayout.nativeLargeHeight
+                        )
                 }
             }
         }

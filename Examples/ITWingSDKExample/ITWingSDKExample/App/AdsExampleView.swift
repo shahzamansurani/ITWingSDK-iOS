@@ -6,46 +6,87 @@ struct AdsExampleView: View {
 
     var body: some View {
         List {
-            Section("Inline banner") {
+            Section("Top banner") {
+                BannerRepresentable(placement: "banner_top")
+                    .frame(height: ITWingAdLayout.bannerHeight)
+            }
+
+            Section("Real AdMob banners") {
                 BannerRepresentable(placement: "banner_adaptive")
-                    .frame(height: 60)
+                    .frame(height: ITWingAdLayout.bannerHeight)
             }
 
-            Section("Native small") {
+            Section("Custom banners") {
+                BannerRepresentable(placement: "custom_adaptive_banner")
+                    .frame(height: ITWingAdLayout.bannerHeight)
+            }
+
+            Section("Real native ads") {
                 NativeRepresentable(placement: "native_small")
-                    .frame(height: 160)
-            }
-
-            Section("Native large") {
+                    .frame(height: ITWingAdLayout.nativeSmallHeight)
                 NativeRepresentable(placement: "native_large")
-                    .frame(height: 300)
+                    .frame(height: ITWingAdLayout.nativeLargeHeight)
             }
 
-            Section("Fullscreen ads") {
-                Button("Preload interstitial") {
-                    ITWingSDK.interstitial.load("interstitial")
-                    status = "Interstitial preload requested"
+            Section("Custom native ads") {
+                NativeRepresentable(placement: "custom_native_small")
+                    .frame(height: ITWingAdLayout.nativeSmallHeight)
+                NativeRepresentable(placement: "custom_native_large")
+                    .frame(height: ITWingAdLayout.nativeLargeHeight)
+            }
+
+            Section("Preloading") {
+                Button("Preload all fullscreen ads") {
+                    ["interstitial", "splash_interstitial", "custom_interstitial"].forEach {
+                        ITWingSDK.interstitial.load($0)
+                    }
+                    ["rewarded", "rewarded_interstitial", "custom_rewarded"].forEach {
+                        ITWingSDK.rewarded.load($0)
+                    }
+                    ITWingSDK.appOpen.load()
+                    status = "Fullscreen ad preload requested"
                 }
+            }
+
+            Section("Interstitials") {
                 Button("Show interstitial") {
-                    guard let presenter = ExamplePresenter.current else { return }
-                    ITWingSDK.interstitial.show(from: presenter, placement: "interstitial") {
-                        status = "Interstitial flow completed"
-                    }
+                    showInterstitial("interstitial")
                 }
-                Button("Preload rewarded") {
-                    ITWingSDK.rewarded.load("rewarded")
-                    status = "Rewarded preload requested"
+                Button("Show splash interstitial") {
+                    showInterstitial("splash_interstitial")
                 }
-                Button("Show rewarded with opt-in") {
-                    guard let presenter = ExamplePresenter.current else { return }
-                    ITWingSDK.rewarded.showWithOptIn(from: presenter, placement: "rewarded") {
-                        status = "Reward earned and ad dismissed"
-                    }
+                Button("Show custom interstitial") {
+                    showInterstitial("custom_interstitial")
                 }
-                Button("Show app-open if available") {
-                    ITWingSDK.appOpen.showIfAvailable(from: ExamplePresenter.current) {
-                        status = "App-open flow completed"
-                    }
+            }
+
+            Section("Rewarded") {
+                Button("Show rewarded video") {
+                    showRewarded("rewarded")
+                }
+                Button("Show rewarded again") {
+                    showRewarded("rewarded")
+                }
+                Button("Show custom rewarded") {
+                    showRewarded("custom_rewarded")
+                }
+                Button("Show rewarded interstitial") {
+                    showRewarded("rewarded_interstitial")
+                }
+                Button("Show custom rewarded with callback") {
+                    showRewarded("custom_rewarded")
+                }
+            }
+
+            Section("App open ads") {
+                Button("Show app open: app_open_auto") {
+                    showAppOpen()
+                }
+                Button("Show app open again") {
+                    showAppOpen()
+                }
+                Button("Show custom interstitial as app-open") {
+                    showInterstitial("custom_interstitial")
                 }
             }
 
@@ -66,6 +107,26 @@ struct AdsExampleView: View {
             }
         }
         .navigationTitle("Ads")
+    }
+
+    private func showInterstitial(_ placement: String) {
+        guard let presenter = ExamplePresenter.current else { return }
+        ITWingSDK.interstitial.show(from: presenter, placement: placement) {
+            status = "Interstitial completed: \(placement)"
+        }
+    }
+
+    private func showRewarded(_ placement: String) {
+        guard let presenter = ExamplePresenter.current else { return }
+        ITWingSDK.rewarded.showWithOptIn(from: presenter, placement: placement) {
+            status = "Reward granted and ad dismissed: \(placement)"
+        }
+    }
+
+    private func showAppOpen() {
+        ITWingSDK.appOpen.showIfAvailable(from: ExamplePresenter.current) {
+            status = "App-open flow completed"
+        }
     }
 }
 
@@ -98,4 +159,3 @@ private struct NativeRepresentable: UIViewRepresentable {
         uiView.loadAdIfNeeded()
     }
 }
-

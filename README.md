@@ -20,7 +20,7 @@ library product.
 In Xcode, open **File → Add Package Dependencies** and enter:
 
 ```text
-https://github.com/itwingtechnologies/ITWingSDK-iOS.git
+https://github.com/shahzamansurani/ITWingSDK-iOS.git
 ```
 
 Select a tagged version and add the `ITWingSDK` product to the app target.
@@ -32,7 +32,7 @@ For a `Package.swift` host:
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/itwingtechnologies/ITWingSDK-iOS.git",
+        url: "https://github.com/shahzamansurani/ITWingSDK-iOS.git",
         from: "1.0.0"
     )
 ]
@@ -188,6 +188,35 @@ func application(
     ITWingSDK.registerPushToken(deviceToken)
 }
 ```
+
+## StoreKit subscriptions and in-app purchases
+
+Create products in the app workspace under **iOS Purchases** using the exact
+product IDs from App Store Connect. The SDK loads localized StoreKit pricing,
+handles purchases and restores, listens for transaction updates, and sends
+Apple's signed StoreKit 2 transaction to the IT Wing backend for certificate,
+signature, bundle-ID, product-ID, expiry, and revocation verification.
+
+Add the reusable admin-managed purchase view:
+
+```swift
+let premiumView = ITWingPremiumView()
+```
+
+Or start a purchase and restore directly:
+
+```swift
+ITWingSubscriptionManager.shared.showPurchaseDialog(from: viewController) { purchased in
+    // Called after a completed purchase, restore, or dialog dismissal.
+}
+
+let restored = await ITWingSubscriptionManager.shared.restore(from: viewController)
+```
+
+Products marked **Removes ads** suppress SDK ads while their verified
+subscription or non-consumable entitlement is active. Mark an in-app product
+with `{"consumable": true}` in its admin metadata when it must be delivered
+once rather than restored as a permanent entitlement.
 
 ## VPN limitation on iOS
 

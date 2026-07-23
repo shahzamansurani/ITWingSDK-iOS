@@ -12,6 +12,7 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
     private var loadingPlacements: Set<String> = []
     private var lastLoadAttemptAt: [String: Date] = [:]
     private let minimumLoadInterval: TimeInterval = 20
+    private var fullScreenToken: UUID?
 
     init(configProvider: @escaping () -> ITWingConfig) {
         self.configProvider = configProvider
@@ -68,14 +69,22 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
             loading.dismiss(completion: onComplete)
             return
         }
+        guard let token = FullScreenAdCoordinator.shared.tryBegin() else {
+            frequency.refundTrigger(placement)
+            loading.dismiss(completion: onComplete)
+            return
+        }
+        fullScreenToken = token
         if let customAd = placement.selectedCustomAd(in: configProvider()) {
             loading.dismiss {
                 let controller = ITWingCustomFullScreenAdController(ad: customAd, placement: placement) {
-                    self.frequency.markShown(placement)
+                    self.finishFullScreen(armInline: true)
                     onComplete()
                 }
-                ITWingUI.presentationHost(fallback: presenter).present(controller, animated: true)
-                AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "interstitial", "network": "custom"])
+                ITWingUI.presentationHost(fallback: presenter).present(controller, animated: true) {
+                    self.frequency.markShown(placement)
+                    AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "interstitial", "network": "custom"])
+                }
             }
             return
         }
@@ -93,9 +102,18 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
             let host = ITWingUI.presentationHost(fallback: presenter)
             self.pendingPresenter = host
             ad.present(from: host)
-            AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "interstitial", "network": "admob"])
-            self.frequency.markShown(placement)
         }
+    }
+
+    public func adWillPresentFullScreenContent(_ ad: FullScreenPresentingAd) {
+        guard let activePlacementName,
+              let placement = placement(named: activePlacementName) else { return }
+        frequency.markShown(placement)
+        AnalyticsClient.shared.track("ad_impression", properties: [
+            "placement": activePlacementName,
+            "format": "interstitial",
+            "network": "admob",
+        ])
     }
 
     public func adDidDismissFullScreenContent(_ ad: FullScreenPresentingAd) {
@@ -105,6 +123,7 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
         }
         activePlacementName = nil
         pendingPresenter = nil
+        finishFullScreen(armInline: true)
         let completion = pendingCompletion
         pendingCompletion = nil
         completion?()
@@ -130,6 +149,8 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
             return
         }
         pendingPresenter = nil
+        frequencyRefund(failedPlacement)
+        finishFullScreen(armInline: false)
         completion?()
         if let failedPlacement {
             load(failedPlacement)
@@ -163,8 +184,6 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
                     let host = ITWingUI.presentationHost(fallback: viewController)
                     self.pendingPresenter = host
                     ad.present(from: host)
-                    AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "interstitial", "network": "admob"])
-                    self.frequency.markShown(placement)
                 }
             } catch {
                 AnalyticsClient.shared.track("interstitial_load_failed", properties: ["placement": placementName])
@@ -175,6 +194,8 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
 
     private func presentFallbackIfAvailable(_ placement: AdPlacementConfig, from presenter: UIViewController, onComplete: @escaping () -> Void) {
         guard let fallback = placement.fallbackCustomAd(in: configProvider()) else {
+            frequency.refundTrigger(placement)
+            finishFullScreen(armInline: false)
             onComplete()
             return
         }
@@ -183,14 +204,35 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
 
     private func presentCustomFallback(_ ad: ITWingCustomAd, placement: AdPlacementConfig, from presenter: UIViewController, onComplete: @escaping () -> Void) {
         let controller = ITWingCustomFullScreenAdController(ad: ad, placement: placement) {
-            self.frequency.markShown(placement)
+            self.finishFullScreen(armInline: true)
             onComplete()
         }
-        ITWingUI.presentationHost(fallback: presenter).present(controller, animated: true)
-        AnalyticsClient.shared.track("ad_impression", properties: ["placement": placement.name, "format": "interstitial", "network": "custom_fallback"])
+        ITWingUI.presentationHost(fallback: presenter).present(controller, animated: true) {
+            self.frequency.markShown(placement)
+            AnalyticsClient.shared.track("ad_impression", properties: ["placement": placement.name, "format": "interstitial", "network": "custom_fallback"])
+        }
     }
 
     private func placement(named name: String) -> AdPlacementConfig? {
         configProvider().ads.placements.first { $0.name == name && $0.format == "interstitial" && $0.enabled }
+    }
+
+    private func frequencyRefund(_ placementName: String?) {
+        guard let placementName, let placement = placement(named: placementName) else { return }
+        frequency.refundTrigger(placement)
+    }
+
+    private func finishFullScreen(armInline: Bool) {
+        if armInline {
+            let token = fullScreenToken
+            fullScreenToken = nil
+            Task { @MainActor in
+                InlineAdSafetyGate.shared.arm()
+                FullScreenAdCoordinator.shared.end(token)
+            }
+            return
+        }
+        FullScreenAdCoordinator.shared.end(fullScreenToken)
+        fullScreenToken = nil
     }
 }

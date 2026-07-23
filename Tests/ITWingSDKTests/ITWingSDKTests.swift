@@ -11,4 +11,10 @@ final class ITWingSDKTests: XCTestCase {
     func testDefaultEndpointUsesHTTPS() {
         XCTAssertEqual(ITWingOptions.default.endpoint.scheme, "https")
     }
+
+    func testInlineAdSizesProtectNativeMediaAndOverlays() {
+        XCTAssertEqual(ITWingAdLayout.bannerHeight, 64)
+        XCTAssertGreaterThanOrEqual(ITWingAdLayout.nativeSmallHeight, 190)
+        XCTAssertGreaterThanOrEqual(ITWingAdLayout.nativeLargeHeight, 280)
+    }
 }

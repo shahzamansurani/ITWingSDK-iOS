@@ -145,7 +145,9 @@ final class ConfigRepository {
     }
 
     func verifyPurchase(payload: [String: Any]) async throws -> Bool {
-        let data = try await signedRequest(path: "/subscriptions/verify", payload: payload)
+        var requestPayload = payload
+        requestPayload["install_id"] = installId()
+        let data = try await signedRequest(path: "/subscriptions/verify", payload: requestPayload)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let responseData = json?["data"] as? [String: Any]
         return responseData?["active"] as? Bool ?? responseData?["success"] as? Bool ?? false

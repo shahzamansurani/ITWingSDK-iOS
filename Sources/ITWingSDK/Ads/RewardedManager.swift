@@ -26,6 +26,7 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
     private let minimumLoadInterval: TimeInterval = 20
     private var waitingPlacements: Set<String> = []
     private var waitTokens: [String: UUID] = [:]
+    private var fullScreenToken: UUID?
 
     init(configProvider: @escaping () -> ITWingConfig) {
         self.configProvider = configProvider
@@ -117,6 +118,17 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
             ITWingUI.showError(from: presenter, title: "Ad unavailable", message: "This rewarded placement has reached its frequency limit.")
             return
         }
+        guard let token = FullScreenAdCoordinator.shared.tryBegin() else {
+            frequency.refundTrigger(placement)
+            showRetryCancel(
+                from: presenter,
+                placementName: placementName,
+                message: "Another full-screen ad is already open. Close it and try again.",
+                onReward: onReward
+            )
+            return
+        }
+        fullScreenToken = token
         if let customAd = placement.selectedCustomAd(in: configProvider()) {
             presentCustomRewarded(customAd, placement: placement, from: presenter, onReward: onReward, network: "custom")
             return
@@ -133,58 +145,13 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
             return
         }
 
-        let host = ITWingUI.presentationHost(fallback: presenter)
-        guard host.viewIfLoaded?.window != nil else {
-            ads[placementName] = ad
-            showRetryCancel(
-                from: viewController,
-                placementName: placementName,
-                message: "The ad screen is not ready yet. Please try again.",
-                onReward: onReward
-            )
-            return
-        }
-        do {
-            try ad.canPresent(from: host)
-        } catch {
-            load(placementName)
-            showRetryCancel(
-                from: host,
-                placementName: placementName,
-                message: "Google Mobile Ads could not present the loaded rewarded ad: \(error.localizedDescription)",
-                onReward: onReward
-            )
-            return
-        }
-        activePlacementName = placementName
-        activePresenter = host
-        activeAd = ad
-        rewardEarned = false
-        pendingReward = onReward
-        presentationPending = true
-        NSLog("[ITWingSDK][Rewarded] presenting placement=%@", placementName)
-        ad.present(from: host) {
-            NSLog("[ITWingSDK][Rewarded] reward granted placement=%@", placementName)
-            self.frequency.markShown(placement)
-            self.rewardEarned = true
-            AnalyticsClient.shared.track("reward_earned", properties: ["placement": placementName, "format": "rewarded", "network": "admob"])
-        }
-        AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "rewarded", "network": "admob"])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak host] in
-            guard let self, self.presentationPending else { return }
-            self.presentationPending = false
-            self.activePlacementName = nil
-            self.pendingReward = nil
-            self.rewardEarned = false
-            self.activeAd = nil
-            guard let host else { return }
-            self.showRetryCancel(
-                from: host,
-                placementName: placementName,
-                message: "The loaded rewarded ad did not open. Please try again.",
-                onReward: onReward
-            )
-        }
+        presentLoadedAd(
+            ad,
+            placement: placement,
+            placementName: placementName,
+            from: presenter,
+            onReward: onReward
+        )
     }
 
     /// Matches Android's RewardedAdPreloader flow: one user action starts (or
@@ -215,11 +182,18 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
 
         func poll() {
             guard waitTokens[placementName] == token else { return }
-            if ads[placementName] != nil {
+            if let ad = ads.removeValue(forKey: placementName),
+               let placement = placement(named: placementName) {
                 finishWaiting()
                 loading.dismiss { [weak self, weak viewController] in
                     guard let self, let viewController else { return }
-                    self.show(from: viewController, placement: placementName, onReward: onReward)
+                    self.presentLoadedAd(
+                        ad,
+                        placement: placement,
+                        placementName: placementName,
+                        from: viewController,
+                        onReward: onReward
+                    )
                 }
                 return
             }
@@ -256,6 +230,10 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
         onReward: @escaping () -> Void,
         attempt: Int = 0
     ) {
+        if !isPresentingRewarded && !presentationPending {
+            FullScreenAdCoordinator.shared.end(fullScreenToken)
+            fullScreenToken = nil
+        }
         DispatchQueue.main.async { [weak self, weak fallback] in
             guard let self, let fallback else { return }
             let host = ITWingUI.presentationHost(fallback: fallback)
@@ -299,6 +277,55 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
         }
     }
 
+    private func presentLoadedAd(
+        _ ad: RewardedAd,
+        placement: AdPlacementConfig,
+        placementName: String,
+        from presenter: UIViewController,
+        onReward: @escaping () -> Void
+    ) {
+        let host = ITWingUI.presentationHost(fallback: presenter)
+        guard host.viewIfLoaded?.window != nil else {
+            ads[placementName] = ad
+            showRetryCancel(
+                from: presenter,
+                placementName: placementName,
+                message: "The ad screen is not ready yet. Please try again.",
+                onReward: onReward
+            )
+            return
+        }
+        do {
+            try ad.canPresent(from: host)
+        } catch {
+            load(placementName)
+            showRetryCancel(
+                from: host,
+                placementName: placementName,
+                message: "Google Mobile Ads could not present the loaded rewarded ad: \(error.localizedDescription)",
+                onReward: onReward
+            )
+            return
+        }
+
+        activePlacementName = placementName
+        activePresenter = host
+        activeAd = ad
+        rewardEarned = false
+        pendingReward = onReward
+        presentationPending = true
+        NSLog("[ITWingSDK][Rewarded] presenting placement=%@", placementName)
+        ad.present(from: host) {
+            NSLog("[ITWingSDK][Rewarded] reward granted placement=%@", placementName)
+            self.rewardEarned = true
+            AnalyticsClient.shared.track("reward_earned", properties: [
+                "placement": placementName,
+                "format": "rewarded",
+                "network": "admob",
+            ])
+        }
+    }
+
     public func adDidDismissFullScreenContent(_ ad: FullScreenPresentingAd) {
         let completedPlacement = activePlacementName
         NSLog(
@@ -320,6 +347,7 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
         isPresentingRewarded = false
         presentationPending = false
         activeLoadingHandle = nil
+        finishFullScreen()
         if let completedPlacement {
             load(completedPlacement)
         }
@@ -349,6 +377,10 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
            let rewardCallback {
             presentCustomRewarded(fallback, placement: placement, from: presenter, onReward: rewardCallback, network: "custom_fallback")
         } else if let failedPlacement {
+            if let placement = placement(named: failedPlacement) {
+                frequency.refundTrigger(placement)
+            }
+            finishFullScreen()
             load(failedPlacement)
         }
     }
@@ -358,8 +390,15 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
         presentationPending = false
         isPresentingRewarded = true
         if let activePlacementName {
+            if let placement = placement(named: activePlacementName) {
+                frequency.markShown(placement)
+            }
             AnalyticsClient.shared.track(
                 "ad_show_started",
+                properties: ["placement": activePlacementName, "format": "rewarded", "network": "admob"]
+            )
+            AnalyticsClient.shared.track(
+                "ad_impression",
                 properties: ["placement": activePlacementName, "format": "rewarded", "network": "admob"]
             )
         }
@@ -415,11 +454,9 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
                     self.pendingReward = onReward
                     self.isPresentingRewarded = true
                     ad.present(from: host) {
-                        self.frequency.markShown(placement)
                         self.rewardEarned = true
                         AnalyticsClient.shared.track("reward_earned", properties: ["placement": placementName, "format": "rewarded", "network": "admob"])
                     }
-                    AnalyticsClient.shared.track("ad_impression", properties: ["placement": placementName, "format": "rewarded", "network": "admob"])
                 }
             } catch {
                 guard self.activeLoadToken == loadToken else { return }
@@ -447,18 +484,28 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
             ad: ad,
             placement: placement,
             onReward: {
-                self.frequency.markShown(placement)
                 AnalyticsClient.shared.track("reward_earned", properties: ["placement": placement.name, "format": "rewarded", "network": network])
                 onReward()
             },
-            onDismiss: {}
+            onDismiss: { self.finishFullScreen() }
         )
-        ITWingUI.presentationHost(fallback: presenter).present(controller, animated: true)
-        AnalyticsClient.shared.track("ad_impression", properties: ["placement": placement.name, "format": "rewarded", "network": network])
+        ITWingUI.presentationHost(fallback: presenter).present(controller, animated: true) {
+            self.frequency.markShown(placement)
+            AnalyticsClient.shared.track("ad_impression", properties: ["placement": placement.name, "format": "rewarded", "network": network])
+        }
     }
 
     private func placement(named name: String) -> AdPlacementConfig? {
         configProvider().ads.placements.first { $0.name == name && $0.format == "rewarded" && $0.enabled }
+    }
+
+    private func finishFullScreen() {
+        let token = fullScreenToken
+        fullScreenToken = nil
+        Task { @MainActor in
+            InlineAdSafetyGate.shared.arm()
+            FullScreenAdCoordinator.shared.end(token)
+        }
     }
 
     @MainActor

@@ -10,6 +10,7 @@ public enum ITWingSDK {
     private static var repository: ConfigRepository?
     private static var currentConfig: ITWingConfig = .empty
     private static var adsBlockedByHost = false
+    private static var adsBlockedByEntitlement = false
 
     public static var interstitial = InterstitialManager(configProvider: { currentConfig })
     public static var rewarded = RewardedManager(configProvider: { currentConfig })
@@ -36,6 +37,7 @@ public enum ITWingSDK {
         Task {
             if let cached = repo.loadCachedConfig() {
                 setConfig(cached)
+                if #available(iOS 15.0, *) { await ITWingSubscriptionManager.shared.sync() }
                 AnalyticsClient.shared.track("sdk_cached_config_loaded", properties: ["config_version": cached.configVersion])
                 await MainActor.run {
                     MobileAds.shared.start(completionHandler: nil)
@@ -46,6 +48,7 @@ public enum ITWingSDK {
             do {
                 let remote = try await repo.bootstrap()
                 setConfig(remote)
+                if #available(iOS 15.0, *) { await ITWingSubscriptionManager.shared.sync() }
                 AnalyticsClient.shared.track("sdk_config_loaded", properties: ["config_version": remote.configVersion])
                 await MainActor.run {
                     MobileAds.shared.start(completionHandler: nil)
@@ -151,7 +154,7 @@ public enum ITWingSDK {
     public static func canRequestAds() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return currentConfig.ads.globalEnabled && !adsBlockedByHost
+        return currentConfig.ads.globalEnabled && !adsBlockedByHost && !adsBlockedByEntitlement
     }
 
     /// User-initiated rewarded ads must remain available while a host app has
@@ -159,7 +162,19 @@ public enum ITWingSDK {
     static func canRequestRewardedAds() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return currentConfig.ads.globalEnabled
+        return currentConfig.ads.globalEnabled && !adsBlockedByEntitlement
+    }
+
+    static func setPremiumAdsBlocked(_ blocked: Bool) {
+        lock.lock()
+        let changed = adsBlockedByEntitlement != blocked
+        adsBlockedByEntitlement = blocked
+        lock.unlock()
+        if changed {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .itwingAdsAvailabilityDidChange, object: nil)
+            }
+        }
     }
 
     public static func uiColor(_ name: String, defaultValue: UIColor) -> UIColor {

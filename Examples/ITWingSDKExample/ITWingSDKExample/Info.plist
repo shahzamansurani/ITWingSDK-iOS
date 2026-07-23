@@ -23,7 +23,7 @@
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-3940256099942544~1458002511</string>
 	<key>ITWingSDKKey</key>
-	<string>$(ITWING_SDK_KEY)</string>
+	<string>itw_live_94kbqo2nFjs3nNhLpOOm3jHWv80k0JQIkHEzHLBD94Banchm</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -33,4 +33,3 @@
 	<dict/>
 </dict>
 </plist>
-
