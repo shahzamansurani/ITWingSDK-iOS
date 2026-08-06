@@ -43,7 +43,11 @@ public final class ITWingSubscriptionManager {
                   let productConfig = configs[transaction.productID],
                   transaction.revocationDate == nil,
                   transaction.expirationDate.map({ $0 > Date() }) ?? true else { continue }
-            _ = await verifyWithBackend(transaction: transaction, signedTransaction: result.jwsRepresentation)
+            _ = await verifyWithBackend(
+                transaction: transaction,
+                signedTransaction: result.jwsRepresentation,
+                storeProduct: productsById[transaction.productID]
+            )
             let candidate = ITWingActiveSubscription(
                 productId: transaction.productID,
                 name: productConfig.name,
@@ -78,7 +82,7 @@ public final class ITWingSubscriptionManager {
                   case .verified(let transaction) = verification else {
                 return false
             }
-            guard await verifyWithBackend(transaction: transaction, signedTransaction: verification.jwsRepresentation) else {
+            guard await verifyWithBackend(transaction: transaction, signedTransaction: verification.jwsRepresentation, storeProduct: product) else {
                 await MainActor.run {
                     ITWingUI.showError(from: presenter, title: "Verification failed", message: "The App Store completed the purchase, but secure verification is not available. Use Restore Purchases when your connection is available.")
                 }
@@ -169,15 +173,22 @@ public final class ITWingSubscriptionManager {
     }
 
     @available(iOS 15.0, *)
-    private func verifyWithBackend(transaction: Transaction, signedTransaction: String) async -> Bool {
+    private func verifyWithBackend(transaction: Transaction, signedTransaction: String, storeProduct: Product? = nil) async -> Bool {
         let config = ITWingSDK.subscriptionProducts().first { $0.store == "app_store" && $0.productId == transaction.productID }
         var payload: [String: Any] = [
             "store": "app_store",
             "product_type": config?.productType ?? (transaction.productType == .autoRenewable ? "subscription" : "inapp"),
             "product_id": transaction.productID,
             "signed_transaction_info": signedTransaction,
+            "original_transaction_id": "\(transaction.originalID)",
             "order_id": String(transaction.id)
         ]
+        if let webOrderLineItemID = transaction.webOrderLineItemID {
+            payload["web_order_line_item_id"] = "\(webOrderLineItemID)"
+        }
+        if let subscriptionGroupID = storeProduct?.subscription?.subscriptionGroupID ?? config?.subscriptionGroupId, !subscriptionGroupID.isEmpty {
+            payload["subscription_group_id"] = subscriptionGroupID
+        }
         if let price = transaction.price {
             payload["charged_price"] = NSDecimalNumber(decimal: price).doubleValue
         }

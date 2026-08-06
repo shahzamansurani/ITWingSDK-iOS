@@ -511,6 +511,7 @@ public struct SubscriptionProductConfig: Codable, Sendable {
     public var store: String
     public var productType: String
     public var productId: String
+    public var subscriptionGroupId: String?
     public var basePlanId: String?
     public var offerId: String?
     public var billingPeriod: String
@@ -529,6 +530,7 @@ public struct SubscriptionProductConfig: Codable, Sendable {
         case store
         case productType = "product_type"
         case productId = "product_id"
+        case subscriptionGroupId = "subscription_group_id"
         case basePlanId = "base_plan_id"
         case offerId = "offer_id"
         case billingPeriod = "billing_period"
@@ -549,9 +551,11 @@ public struct SubscriptionProductConfig: Codable, Sendable {
         store = try values.decode(String.self, forKey: .store)
         productType = try values.decodeIfPresent(String.self, forKey: .productType) ?? "subscription"
         productId = try values.decode(String.self, forKey: .productId)
+        subscriptionGroupId = try values.decodeIfPresent(String.self, forKey: .subscriptionGroupId)
         basePlanId = try values.decodeIfPresent(String.self, forKey: .basePlanId)
         offerId = try values.decodeIfPresent(String.self, forKey: .offerId)
-        billingPeriod = try values.decode(String.self, forKey: .billingPeriod)
+        billingPeriod = try values.decodeIfPresent(String.self, forKey: .billingPeriod)
+            ?? (productType == "inapp" ? "lifetime" : "monthly")
         price = try values.decodeIfPresent(Double.self, forKey: .price)
         currency = try values.decodeIfPresent(String.self, forKey: .currency)
         removesAds = try values.decodeIfPresent(Bool.self, forKey: .removesAds) ?? false

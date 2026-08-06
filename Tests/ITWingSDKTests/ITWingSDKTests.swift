@@ -17,4 +17,26 @@ final class ITWingSDKTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(ITWingAdLayout.nativeSmallHeight, 190)
         XCTAssertGreaterThanOrEqual(ITWingAdLayout.nativeLargeHeight, 280)
     }
+
+    func testSubscriptionProductDecodesWithoutBillingPeriod() throws {
+        let json = """
+        {
+          "id": "product-1",
+          "name": "Premium",
+          "store": "app_store",
+          "product_type": "subscription",
+          "product_id": "celebrity_look_alike",
+          "subscription_group_id": "123456",
+          "removes_ads": true,
+          "entitlements": { "premium": true }
+        }
+        """.data(using: .utf8)!
+
+        let product = try JSONDecoder().decode(SubscriptionProductConfig.self, from: json)
+
+        XCTAssertEqual(product.productId, "celebrity_look_alike")
+        XCTAssertEqual(product.subscriptionGroupId, "123456")
+        XCTAssertEqual(product.billingPeriod, "monthly")
+        XCTAssertTrue(product.removesAds)
+    }
 }
