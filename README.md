@@ -213,6 +213,18 @@ ITWingSubscriptionManager.shared.showPurchaseDialog(from: viewController) { purc
 let restored = await ITWingSubscriptionManager.shared.restore(from: viewController)
 ```
 
+If App Store Connect products are not appearing in a development, StoreKit
+configuration, or TestFlight build, print diagnostics after initialization:
+
+```swift
+print(ITWingSDK.billingDiagnostics())
+```
+
+The output includes configured product IDs, loaded StoreKit product IDs,
+missing product IDs, the app bundle ID, and the last StoreKit loading message.
+The purchase dialog keeps actions enabled and shows the same StoreKit diagnostic
+instead of disabling a product card.
+
 Products marked **Removes ads** suppress SDK ads while their verified
 subscription or non-consumable entitlement is active. Mark an in-app product
 with `{"consumable": true}` in its admin metadata when it must be delivered

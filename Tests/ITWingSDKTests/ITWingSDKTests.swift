@@ -18,7 +18,7 @@ final class ITWingSDKTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(ITWingAdLayout.nativeLargeHeight, 280)
     }
 
-    func testSubscriptionProductDecodesWithoutBillingPeriod() throws {
+    func testSubscriptionProductDecodesWeeklyBillingPeriod() throws {
         let json = """
         {
           "id": "product-1",
@@ -27,6 +27,7 @@ final class ITWingSDKTests: XCTestCase {
           "product_type": "subscription",
           "product_id": "celebrity_look_alike",
           "subscription_group_id": "123456",
+          "billing_period": "weekly",
           "removes_ads": true,
           "entitlements": { "premium": true }
         }
@@ -36,7 +37,24 @@ final class ITWingSDKTests: XCTestCase {
 
         XCTAssertEqual(product.productId, "celebrity_look_alike")
         XCTAssertEqual(product.subscriptionGroupId, "123456")
-        XCTAssertEqual(product.billingPeriod, "monthly")
+        XCTAssertEqual(product.billingPeriod, "weekly")
         XCTAssertTrue(product.removesAds)
+    }
+
+    func testSubscriptionProductDefaultsMissingBillingPeriod() throws {
+        let json = """
+        {
+          "id": "product-1",
+          "name": "Premium",
+          "store": "app_store",
+          "product_type": "subscription",
+          "product_id": "celebrity_look_alike",
+          "removes_ads": true
+        }
+        """.data(using: .utf8)!
+
+        let product = try JSONDecoder().decode(SubscriptionProductConfig.self, from: json)
+
+        XCTAssertEqual(product.billingPeriod, "monthly")
     }
 }

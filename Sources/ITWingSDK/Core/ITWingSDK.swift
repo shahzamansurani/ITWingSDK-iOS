@@ -4,7 +4,7 @@ import UIKit
 
 public enum ITWingSDK {
     /// Semantic version sent to the IT Wing backend with every SDK request.
-    public static let version = "1.0.1"
+    public static let version = "1.0.2"
 
     private static let lock = NSLock()
     private static var repository: ConfigRepository?
@@ -136,6 +136,20 @@ public enum ITWingSDK {
 
     public static func subscriptionProducts() -> [SubscriptionProductConfig] {
         currentConfig.subscriptions.products
+    }
+
+    public static func billingDiagnostics() -> [String: Any] {
+        if #available(iOS 15.0, *) {
+            return ITWingSubscriptionManager.shared.diagnostics()
+        }
+
+        return [
+            "configured_products": currentConfig.subscriptions.products.map(\.productId),
+            "loaded_store_products": [],
+            "missing_store_products": currentConfig.subscriptions.products.map(\.productId),
+            "bundle_id": Bundle.main.bundleIdentifier ?? "",
+            "last_storekit_message": "StoreKit purchases require iOS 15 or later.",
+        ]
     }
 
     public static func setAdsBlocked(_ blocked: Bool) {

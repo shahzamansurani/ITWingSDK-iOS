@@ -13,8 +13,10 @@ public final class ITWingSubscriptionManager {
 
     public private(set) var hasPremiumAccess = false
     public private(set) var activeSubscription: ITWingActiveSubscription?
+    public private(set) var lastStoreKitMessage: String?
 
     private var updatesTask: Task<Void, Never>?
+    private var loadedStoreProductIds: Set<String> = []
 
     private init() {
         if #available(iOS 15.0, *) {
@@ -34,8 +36,7 @@ public final class ITWingSubscriptionManager {
         let configs = Dictionary(uniqueKeysWithValues: ITWingSDK.subscriptionProducts()
             .filter { $0.store == "app_store" }
             .map { ($0.productId, $0) })
-        let storeProducts = (try? await Product.products(for: Array(configs.keys))) ?? []
-        let productsById = Dictionary(uniqueKeysWithValues: storeProducts.map { ($0.id, $0) })
+        let productsById = await loadStoreProducts(configs: Array(configs.values))
         var latest: ITWingActiveSubscription?
         var removesAds = false
         for await result in Transaction.currentEntitlements {
@@ -73,7 +74,9 @@ public final class ITWingSubscriptionManager {
         do {
             guard let product = try await Product.products(for: [config.productId]).first else {
                 await MainActor.run {
-                    ITWingUI.showError(from: presenter, title: "Purchase unavailable", message: "This plan is not available from the App Store right now.")
+                    let message = self.storeKitUnavailableMessage(for: config)
+                    self.lastStoreKitMessage = message
+                    ITWingUI.showError(from: presenter, title: "Purchase unavailable", message: message)
                 }
                 return false
             }
@@ -147,11 +150,11 @@ public final class ITWingSubscriptionManager {
         }
 
         Task {
-            let products = (try? await Product.products(for: configs.map(\.productId))) ?? []
-            let productsById = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
+            let productsById = await self.loadStoreProducts(configs: configs)
             let dialog = ITWingPurchaseViewController(
                 configs: configs,
                 storeProducts: productsById,
+                storeKitMessage: self.lastStoreKitMessage,
                 activeProductId: activeSubscription?.productId,
                 purchase: { [weak self] config, controller in
                     guard let self else { return false }
@@ -170,6 +173,20 @@ public final class ITWingSubscriptionManager {
             }
             presenter.present(dialog, animated: true)
         }
+    }
+
+    @available(iOS 15.0, *)
+    public func diagnostics() -> [String: Any] {
+        let configured = ITWingSDK.subscriptionProducts()
+            .filter { $0.store == "app_store" }
+            .map(\.productId)
+        return [
+            "configured_products": configured,
+            "loaded_store_products": Array(loadedStoreProductIds).sorted(),
+            "missing_store_products": configured.filter { !loadedStoreProductIds.contains($0) },
+            "bundle_id": Bundle.main.bundleIdentifier ?? "",
+            "last_storekit_message": lastStoreKitMessage ?? "",
+        ]
     }
 
     @available(iOS 15.0, *)
@@ -203,8 +220,48 @@ public final class ITWingSubscriptionManager {
     }
 
     private func formattedPrice(_ config: SubscriptionProductConfig?) -> String {
-        guard let price = config?.price else { return "Price unavailable" }
+        guard let price = config?.price else { return "See price in App Store" }
         return "\(config?.currency ?? "") \(price)"
+    }
+
+    @available(iOS 15.0, *)
+    private func loadStoreProducts(configs: [SubscriptionProductConfig]) async -> [String: Product] {
+        let productIds = Array(Set(configs.map(\.productId).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
+        guard !productIds.isEmpty else {
+            await MainActor.run {
+                self.loadedStoreProductIds = []
+                self.lastStoreKitMessage = "No App Store product IDs are configured in ITWing admin."
+            }
+            return [:]
+        }
+
+        do {
+            let products = try await Product.products(for: productIds)
+            let productsById = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
+            let loadedIds = Set(productsById.keys)
+            let missingIds = productIds.filter { !loadedIds.contains($0) }
+            await MainActor.run {
+                self.loadedStoreProductIds = loadedIds
+                self.lastStoreKitMessage = missingIds.isEmpty ? nil : self.missingStoreKitProductsMessage(missingIds)
+            }
+            return productsById
+        } catch {
+            await MainActor.run {
+                self.loadedStoreProductIds = []
+                self.lastStoreKitMessage = "StoreKit could not load App Store products: \(error.localizedDescription)"
+            }
+            return [:]
+        }
+    }
+
+    private func storeKitUnavailableMessage(for config: SubscriptionProductConfig) -> String {
+        lastStoreKitMessage?.nonEmpty
+            ?? missingStoreKitProductsMessage([config.productId])
+    }
+
+    private func missingStoreKitProductsMessage(_ productIds: [String]) -> String {
+        let ids = productIds.joined(separator: ", ")
+        return "The App Store did not return product details for \(ids). Confirm the bundle ID, App Store Connect app record, product status, signed build/TestFlight or StoreKit configuration file, Paid Apps agreements, and exact product ID."
     }
 }
 
@@ -212,6 +269,7 @@ public final class ITWingSubscriptionManager {
 private final class ITWingPurchaseViewController: UIViewController {
     private let configs: [SubscriptionProductConfig]
     private let storeProducts: [String: Product]
+    private let storeKitMessage: String?
     private let activeProductId: String?
     private let purchase: (SubscriptionProductConfig, UIViewController) async -> Bool
     private let restore: (UIViewController) async -> Bool
@@ -222,6 +280,7 @@ private final class ITWingPurchaseViewController: UIViewController {
     init(
         configs: [SubscriptionProductConfig],
         storeProducts: [String: Product],
+        storeKitMessage: String?,
         activeProductId: String?,
         purchase: @escaping (SubscriptionProductConfig, UIViewController) async -> Bool,
         restore: @escaping (UIViewController) async -> Bool,
@@ -229,6 +288,7 @@ private final class ITWingPurchaseViewController: UIViewController {
     ) {
         self.configs = configs
         self.storeProducts = storeProducts
+        self.storeKitMessage = storeKitMessage
         self.activeProductId = activeProductId
         self.purchase = purchase
         self.restore = restore
@@ -273,15 +333,17 @@ private final class ITWingPurchaseViewController: UIViewController {
         subtitle.font = .systemFont(ofSize: 14)
         subtitle.textColor = ITWingSDK.uiColor("premium_text_color", defaultValue: .secondaryLabel)
         subtitle.text = activeProductId == nil
-            ? "Secure App Store checkout. Products, display settings, and entitlements come from this app’s IT Wing admin configuration; localized prices come directly from the App Store."
+            ? "Secure App Store checkout. Products, display settings, and entitlements come from this app's IT Wing admin configuration; localized prices come directly from the App Store."
             : "Your active purchase is shown below. App Store purchases are restored automatically for this Apple ID."
         content.addArrangedSubview(subtitle)
 
         statusLabel.numberOfLines = 0
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusLabel.textColor = primary
-        statusLabel.isHidden = activeProductId == nil
-        statusLabel.text = activeProductId == nil ? nil : "Premium is active. Ads are disabled when the active product is configured to remove ads."
+        statusLabel.isHidden = activeProductId == nil && storeKitMessage?.nonEmpty == nil
+        statusLabel.text = activeProductId == nil
+            ? storeKitMessage?.nonEmpty
+            : "Premium is active. Ads are disabled when the active product is configured to remove ads."
         content.addArrangedSubview(statusLabel)
 
         configs.forEach { content.addArrangedSubview(productCard(config: $0, primary: primary)) }
@@ -290,7 +352,7 @@ private final class ITWingPurchaseViewController: UIViewController {
         restoreButton.addAction(UIAction { [weak self, weak restoreButton] _ in
             guard let self else { return }
             restoreButton?.isEnabled = false
-            restoreButton?.setTitle("Checking purchases…", for: .normal)
+            restoreButton?.setTitle("Checking purchases...", for: .normal)
             Task {
                 let restored = await self.restore(self)
                 await MainActor.run {
@@ -357,7 +419,11 @@ private final class ITWingPurchaseViewController: UIViewController {
             card.addArrangedSubview(label(offer, size: 13, weight: .semibold, color: primary))
         }
         let oneTime = config.productType == "inapp" || config.billingPeriod == "lifetime"
-        card.addArrangedSubview(label(oneTime ? "One-time purchase" : periodLabel(config: config, product: product), size: 13, weight: .semibold, color: .secondaryLabel))
+        let productType = oneTime ? "One-time purchase" : "Subscription"
+        let billing = oneTime ? "Lifetime" : periodLabel(config: config, product: product)
+        card.addArrangedSubview(label("Plan: \(config.name.nonEmpty ?? product?.displayName ?? config.productId)", size: 13, weight: .semibold, color: .secondaryLabel))
+        card.addArrangedSubview(label("Billing: \(productType) | \(billing)", size: 13, weight: .semibold, color: .secondaryLabel))
+        card.addArrangedSubview(label("Price: \(product?.displayPrice ?? configuredPrice(config))", size: 13, weight: .semibold, color: .secondaryLabel))
         let description = config.productDescription?.nonEmpty
             ?? product?.description.nonEmpty
             ?? config.entitlements?.keys.map { $0.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ").nonEmpty
@@ -368,17 +434,14 @@ private final class ITWingPurchaseViewController: UIViewController {
 
         let owned = activeProductId == config.productId
         let button = filledButton(title: owned ? "Active purchase" : (activeProductId == nil || oneTime ? "Continue" : "Change plan"), color: primary)
-        button.isEnabled = !owned && product != nil
+        button.isEnabled = !owned
         button.alpha = button.isEnabled ? 1 : 0.65
-        if product == nil && !owned {
-            button.setTitle("Unavailable in App Store", for: .normal)
-        }
         button.addAction(UIAction { [weak self, weak button] _ in
             guard let self else { return }
             button?.isEnabled = false
-            button?.setTitle("Opening App Store…", for: .normal)
+            button?.setTitle("Opening App Store...", for: .normal)
             self.statusLabel.isHidden = false
-            self.statusLabel.text = "Opening secure App Store checkout…"
+            self.statusLabel.text = "Opening secure App Store checkout..."
             Task {
                 let success = await self.purchase(config, self)
                 await MainActor.run {
@@ -399,7 +462,7 @@ private final class ITWingPurchaseViewController: UIViewController {
 
     private func periodLabel(config: SubscriptionProductConfig, product: Product?) -> String {
         guard let period = product?.subscription?.subscriptionPeriod else {
-            return config.billingPeriod.replacingOccurrences(of: "_", with: " ").capitalized + " subscription"
+            return config.billingPeriod.replacingOccurrences(of: "_", with: " ").capitalized
         }
         let unit: String
         switch period.unit {
@@ -409,7 +472,7 @@ private final class ITWingPurchaseViewController: UIViewController {
         case .year: unit = period.value == 1 ? "year" : "years"
         @unknown default: unit = "period"
         }
-        return period.value == 1 ? "\(unit.capitalized) subscription" : "\(period.value) \(unit) subscription"
+        return period.value == 1 ? unit.capitalized : "\(period.value) \(unit)"
     }
 
     private func offerText(config: SubscriptionProductConfig, product: Product?) -> String? {
