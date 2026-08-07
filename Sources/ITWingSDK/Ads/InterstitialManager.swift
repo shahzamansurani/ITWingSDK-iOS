@@ -32,6 +32,7 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
             defer { self.loadingPlacements.remove(placementName) }
             do {
                 let ad = try await InterstitialAd.load(with: unit.adUnitId, request: Request())
+                guard ITWingSDK.canRequestAds() else { return }
                 ad.fullScreenContentDelegate = self
                 ad.paidEventHandler = { adValue in
                     AnalyticsClient.shared.track("ad_paid", properties: [
@@ -50,6 +51,12 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
                 AnalyticsClient.shared.track("interstitial_load_failed", properties: ["placement": placementName])
             }
         }
+    }
+
+    func clearCachedAds() {
+        ads.removeAll()
+        loadingPlacements.removeAll()
+        lastLoadAttemptAt.removeAll()
     }
 
     private func canStartPreload(_ placementName: String) -> Bool {
@@ -166,6 +173,14 @@ public final class InterstitialManager: NSObject, FullScreenContentDelegate {
         Task { @MainActor in
             do {
                 let ad = try await InterstitialAd.load(with: unit.adUnitId, request: Request())
+                guard ITWingSDK.canRequestAds() else {
+                    loading.dismiss {
+                        self.frequency.refundTrigger(placement)
+                        self.finishFullScreen(armInline: false)
+                        onComplete()
+                    }
+                    return
+                }
                 ad.fullScreenContentDelegate = self
                 ad.paidEventHandler = { adValue in
                     AnalyticsClient.shared.track("ad_paid", properties: [

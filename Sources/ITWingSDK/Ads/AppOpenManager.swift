@@ -49,6 +49,10 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
         Task { @MainActor in
             do {
                 let loaded = try await AppOpenAd.load(with: unit.adUnitId, request: Request())
+                guard ITWingSDK.canRequestAds() else {
+                    self.isLoading = false
+                    return
+                }
                 loaded.fullScreenContentDelegate = self
                 loaded.paidEventHandler = { adValue in
                     AnalyticsClient.shared.track("ad_paid", properties: [
@@ -68,6 +72,12 @@ public final class AppOpenManager: NSObject, FullScreenContentDelegate {
             }
             self.isLoading = false
         }
+    }
+
+    func clearCachedAds() {
+        ad = nil
+        isLoading = false
+        lastLoadAttemptAt.removeAll()
     }
 
     public func showIfAvailable(from viewController: UIViewController? = nil, onComplete: (() -> Void)? = nil) {

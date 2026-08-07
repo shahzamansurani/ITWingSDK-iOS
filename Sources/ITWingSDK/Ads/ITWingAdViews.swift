@@ -72,7 +72,9 @@ open class ITWingBannerView: UIView, BannerViewDelegate {
         bannerView?.delegate = nil
         bannerView?.removeFromSuperview()
         bannerView = nil
+        subviews.forEach { $0.removeFromSuperview() }
         hasRequested = false
+        isHidden = !ITWingSDK.canRequestAds()
     }
 
     public func loadAdIfNeeded() {
@@ -265,6 +267,7 @@ open class ITWingNativeAdView: UIView, NativeAdLoaderDelegate, NativeAdDelegate 
         adLoader = nil
         subviews.forEach { $0.removeFromSuperview() }
         hasRequested = false
+        isHidden = !ITWingSDK.canRequestAds()
     }
 
     public func loadAdIfNeeded() {

@@ -5,6 +5,9 @@ public struct ITWingActiveSubscription: Sendable {
     public let productId: String
     public let name: String
     public let displayPrice: String
+    public let productType: String
+    public let billingPeriod: String
+    public let removesAds: Bool
     public let expiryDate: Date?
 }
 
@@ -53,6 +56,9 @@ public final class ITWingSubscriptionManager {
                 productId: transaction.productID,
                 name: productConfig.name,
                 displayPrice: productsById[transaction.productID]?.displayPrice ?? formattedPrice(productConfig),
+                productType: productConfig.productType,
+                billingPeriod: productsById[transaction.productID]?.subscription?.subscriptionPeriod.displayLabel ?? productConfig.billingPeriod,
+                removesAds: productConfig.removesAds,
                 expiryDate: transaction.expirationDate
             )
             if latest == nil || (candidate.expiryDate ?? .distantFuture) > (latest?.expiryDate ?? .distantPast) {
@@ -80,6 +86,8 @@ public final class ITWingSubscriptionManager {
                 }
                 return false
             }
+            ITWingSDK.setPurchaseFlowAdsBlocked(true)
+            defer { ITWingSDK.setPurchaseFlowAdsBlocked(false) }
             let result = try await product.purchase()
             guard case .success(let verification) = result,
                   case .verified(let transaction) = verification else {
@@ -99,6 +107,9 @@ public final class ITWingSubscriptionManager {
                 productId: transaction.productID,
                 name: config.name,
                 displayPrice: product.displayPrice,
+                productType: config.productType,
+                billingPeriod: product.subscription?.subscriptionPeriod.displayLabel ?? config.billingPeriod,
+                removesAds: config.removesAds,
                 expiryDate: transaction.expirationDate
             )
             await MainActor.run {
@@ -155,7 +166,7 @@ public final class ITWingSubscriptionManager {
                 configs: configs,
                 storeProducts: productsById,
                 storeKitMessage: self.lastStoreKitMessage,
-                activeProductId: activeSubscription?.productId,
+                activeSubscription: activeSubscription,
                 purchase: { [weak self] config, controller in
                     guard let self else { return false }
                     return await self.purchase(config, from: controller)
@@ -270,7 +281,7 @@ private final class ITWingPurchaseViewController: UIViewController {
     private let configs: [SubscriptionProductConfig]
     private let storeProducts: [String: Product]
     private let storeKitMessage: String?
-    private let activeProductId: String?
+    private let activeSubscription: ITWingActiveSubscription?
     private let purchase: (SubscriptionProductConfig, UIViewController) async -> Bool
     private let restore: (UIViewController) async -> Bool
     private let completion: ((Bool) -> Void)?
@@ -281,7 +292,7 @@ private final class ITWingPurchaseViewController: UIViewController {
         configs: [SubscriptionProductConfig],
         storeProducts: [String: Product],
         storeKitMessage: String?,
-        activeProductId: String?,
+        activeSubscription: ITWingActiveSubscription?,
         purchase: @escaping (SubscriptionProductConfig, UIViewController) async -> Bool,
         restore: @escaping (UIViewController) async -> Bool,
         completion: ((Bool) -> Void)?
@@ -289,7 +300,7 @@ private final class ITWingPurchaseViewController: UIViewController {
         self.configs = configs
         self.storeProducts = storeProducts
         self.storeKitMessage = storeKitMessage
-        self.activeProductId = activeProductId
+        self.activeSubscription = activeSubscription
         self.purchase = purchase
         self.restore = restore
         self.completion = completion
@@ -332,7 +343,7 @@ private final class ITWingPurchaseViewController: UIViewController {
         subtitle.numberOfLines = 0
         subtitle.font = .systemFont(ofSize: 14)
         subtitle.textColor = ITWingSDK.uiColor("premium_text_color", defaultValue: .secondaryLabel)
-        subtitle.text = activeProductId == nil
+        subtitle.text = activeSubscription == nil
             ? "Secure App Store checkout. Products, display settings, and entitlements come from this app's IT Wing admin configuration; localized prices come directly from the App Store."
             : "Your active purchase is shown below. App Store purchases are restored automatically for this Apple ID."
         content.addArrangedSubview(subtitle)
@@ -340,10 +351,10 @@ private final class ITWingPurchaseViewController: UIViewController {
         statusLabel.numberOfLines = 0
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusLabel.textColor = primary
-        statusLabel.isHidden = activeProductId == nil && storeKitMessage?.nonEmpty == nil
-        statusLabel.text = activeProductId == nil
+        statusLabel.isHidden = activeSubscription == nil && storeKitMessage?.nonEmpty == nil
+        statusLabel.text = activeSubscription == nil
             ? storeKitMessage?.nonEmpty
-            : "Premium is active. Ads are disabled when the active product is configured to remove ads."
+            : activeDescription()
         content.addArrangedSubview(statusLabel)
 
         configs.forEach { content.addArrangedSubview(productCard(config: $0, primary: primary)) }
@@ -432,8 +443,8 @@ private final class ITWingPurchaseViewController: UIViewController {
         descriptionLabel.numberOfLines = 0
         card.addArrangedSubview(descriptionLabel)
 
-        let owned = activeProductId == config.productId
-        let button = filledButton(title: owned ? "Active purchase" : (activeProductId == nil || oneTime ? "Continue" : "Change plan"), color: primary)
+        let owned = activeSubscription?.productId == config.productId
+        let button = filledButton(title: owned ? "Active purchase" : (activeSubscription == nil || oneTime ? "Continue" : "Change plan"), color: primary)
         button.isEnabled = !owned
         button.alpha = button.isEnabled ? 1 : 0.65
         button.addAction(UIAction { [weak self, weak button] _ in
@@ -450,7 +461,7 @@ private final class ITWingPurchaseViewController: UIViewController {
                         self.dismissResult(true)
                     } else {
                         button?.isEnabled = true
-                        button?.setTitle(self.activeProductId == nil || oneTime ? "Continue" : "Change plan", for: .normal)
+                        button?.setTitle(self.activeSubscription == nil || oneTime ? "Continue" : "Change plan", for: .normal)
                         self.statusLabel.text = "The purchase was not completed. You can retry or restore an existing purchase."
                     }
                 }
@@ -473,6 +484,12 @@ private final class ITWingPurchaseViewController: UIViewController {
         @unknown default: unit = "period"
         }
         return period.value == 1 ? unit.capitalized : "\(period.value) \(unit)"
+    }
+
+    private func activeDescription() -> String {
+        guard let activeSubscription else { return "" }
+        let expiry = activeSubscription.expiryText
+        return "Premium is active\nPlan: \(activeSubscription.name)\nBilling: \(activeSubscription.billingDisplay)\n\(expiry)"
     }
 
     private func offerText(config: SubscriptionProductConfig, product: Product?) -> String? {
@@ -541,10 +558,19 @@ private extension String {
 }
 
 open class ITWingPremiumView: UIView {
+    private let badgeLabel = UILabel()
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
+    private let detailsStack = UIStackView()
+    private let planLabel = UILabel()
+    private let billingLabel = UILabel()
+    private let priceLabel = UILabel()
+    private let expiryLabel = UILabel()
+    private let messageLabel = UILabel()
     private let actionButton = UIButton(type: .system)
+    private let restoreButton = UIButton(type: .system)
     private let stack = UIStackView()
+    private var observers: [NSObjectProtocol] = []
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
@@ -568,11 +594,31 @@ open class ITWingPremiumView: UIView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         blur.contentView.addSubview(stack)
 
+        badgeLabel.font = .systemFont(ofSize: 12, weight: .bold)
+        badgeLabel.textAlignment = .center
+        badgeLabel.layer.cornerRadius = 10
+        badgeLabel.clipsToBounds = true
+
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
         titleLabel.textColor = ITWingSDK.uiColor("premium_title_color", defaultValue: ITWingSDK.uiColor("text_color", defaultValue: .label))
         subtitleLabel.font = .systemFont(ofSize: 14, weight: .regular)
         subtitleLabel.textColor = ITWingSDK.uiColor("premium_text_color", defaultValue: ITWingSDK.uiColor("secondary_text_color", defaultValue: .secondaryLabel))
         subtitleLabel.numberOfLines = 0
+
+        detailsStack.axis = .vertical
+        detailsStack.spacing = 5
+        [planLabel, billingLabel, priceLabel, expiryLabel].forEach {
+            $0.font = .systemFont(ofSize: 13, weight: .semibold)
+            $0.textColor = ITWingSDK.uiColor("premium_text_color", defaultValue: ITWingSDK.uiColor("secondary_text_color", defaultValue: .secondaryLabel))
+            $0.numberOfLines = 0
+            detailsStack.addArrangedSubview($0)
+        }
+
+        messageLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        messageLabel.textColor = ITWingSDK.uiColor("primary", defaultValue: .systemBlue)
+        messageLabel.numberOfLines = 0
+        messageLabel.isHidden = true
+
         actionButton.layer.cornerRadius = 13
         actionButton.backgroundColor = ITWingSDK.uiColor("premium_button_color", defaultValue: ITWingSDK.uiColor("primary", defaultValue: .systemBlue))
         actionButton.setTitleColor(ITWingSDK.uiColor("premium_button_text_color", defaultValue: .white), for: .normal)
@@ -580,9 +626,21 @@ open class ITWingPremiumView: UIView {
         actionButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
         actionButton.addTarget(self, action: #selector(openPurchaseDialog), for: .touchUpInside)
 
+        restoreButton.layer.cornerRadius = 13
+        restoreButton.layer.borderWidth = 1
+        restoreButton.layer.borderColor = ITWingSDK.uiColor("premium_button_color", defaultValue: ITWingSDK.uiColor("primary", defaultValue: .systemBlue)).cgColor
+        restoreButton.setTitleColor(ITWingSDK.uiColor("premium_button_color", defaultValue: ITWingSDK.uiColor("primary", defaultValue: .systemBlue)), for: .normal)
+        restoreButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        restoreButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        restoreButton.addTarget(self, action: #selector(restorePurchases), for: .touchUpInside)
+
+        stack.addArrangedSubview(badgeLabel)
         stack.addArrangedSubview(titleLabel)
         stack.addArrangedSubview(subtitleLabel)
+        stack.addArrangedSubview(detailsStack)
+        stack.addArrangedSubview(messageLabel)
         stack.addArrangedSubview(actionButton)
+        stack.addArrangedSubview(restoreButton)
 
         NSLayoutConstraint.activate([
             blur.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -594,8 +652,15 @@ open class ITWingPremiumView: UIView {
             stack.topAnchor.constraint(equalTo: blur.contentView.topAnchor, constant: 16),
             stack.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor, constant: -16),
         ])
+        observers = [.itwingPremiumEntitlementDidChange, .itwingAdsAvailabilityDidChange, .itwingConfigDidChange].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.refresh()
+            }
+        }
         refresh()
     }
+
+    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     open override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -609,16 +674,42 @@ open class ITWingPremiumView: UIView {
     }
 
     public func refresh() {
+        applyColors()
         if let active = ITWingSubscriptionManager.shared.activeSubscription {
+            badgeLabel.text = "ACTIVE"
             titleLabel.text = "Premium active"
-            let expiry = active.expiryDate.map { DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? "Managed by App Store"
-            subtitleLabel.text = "\(active.name)\nExpires: \(expiry)"
+            subtitleLabel.text = "Ads are disabled while this purchase remains active."
+            detailsStack.isHidden = false
+            planLabel.text = "Plan: \(active.name)"
+            billingLabel.text = "Billing: \(active.productTypeDisplay) | \(active.billingDisplay)"
+            priceLabel.text = "Price: \(active.displayPrice)"
+            expiryLabel.text = active.expiryText
             actionButton.setTitle("Change plan", for: .normal)
+            actionButton.isEnabled = !active.isOneTimePurchase
+            actionButton.alpha = actionButton.isEnabled ? 1 : 0.72
+            restoreButton.setTitle("Manage subscription", for: .normal)
+            restoreButton.isHidden = active.isOneTimePurchase
         } else {
+            badgeLabel.text = "AVAILABLE"
             titleLabel.text = "Remove ads"
             subtitleLabel.text = "Unlock premium and remove ads while your plan is active."
+            detailsStack.isHidden = true
             actionButton.setTitle("View plans", for: .normal)
+            actionButton.isEnabled = true
+            actionButton.alpha = 1
+            restoreButton.setTitle("Restore purchases", for: .normal)
+            restoreButton.isHidden = false
         }
+    }
+
+    private func applyColors() {
+        let primary = ITWingSDK.uiColor("premium_button_color", defaultValue: ITWingSDK.uiColor("primary", defaultValue: .systemBlue))
+        actionButton.backgroundColor = primary
+        actionButton.setTitleColor(ITWingSDK.uiColor("premium_button_text_color", defaultValue: .white), for: .normal)
+        restoreButton.layer.borderColor = primary.cgColor
+        restoreButton.setTitleColor(primary, for: .normal)
+        badgeLabel.textColor = primary
+        badgeLabel.backgroundColor = primary.withAlphaComponent(0.12)
     }
 
     @objc private func openPurchaseDialog() {
@@ -630,5 +721,66 @@ open class ITWingPremiumView: UIView {
         } else {
             ITWingUI.showError(from: presenter, title: "iOS update needed", message: "Purchases require iOS 15 or later.")
         }
+    }
+
+    @objc private func restorePurchases() {
+        guard let presenter = UIApplication.shared.itwingVisibleViewController else { return }
+        if let active = ITWingSubscriptionManager.shared.activeSubscription,
+           !active.isOneTimePurchase,
+           let url = URL(string: "https://apps.apple.com/account/subscriptions") {
+            UIApplication.shared.open(url)
+            return
+        }
+        if #available(iOS 15.0, *) {
+            restoreButton.isEnabled = false
+            restoreButton.setTitle("Checking purchases...", for: .normal)
+            Task {
+                let restored = await ITWingSubscriptionManager.shared.restore(from: presenter)
+                await MainActor.run {
+                    self.restoreButton.isEnabled = true
+                    self.messageLabel.isHidden = false
+                    self.messageLabel.text = restored ? "Purchase restored." : "No active purchase was found."
+                    self.refresh()
+                }
+            }
+        } else {
+            ITWingUI.showError(from: presenter, title: "iOS update needed", message: "Purchases require iOS 15 or later.")
+        }
+    }
+}
+
+private extension ITWingActiveSubscription {
+    var productTypeDisplay: String {
+        isOneTimePurchase ? "One-time purchase" : "Subscription"
+    }
+
+    var isOneTimePurchase: Bool {
+        productType == "inapp" || billingPeriod == "lifetime"
+    }
+
+    var billingDisplay: String {
+        billingPeriod.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    var expiryText: String {
+        if let expiryDate {
+            return "Expires: \(DateFormatter.localizedString(from: expiryDate, dateStyle: .medium, timeStyle: .short))"
+        }
+        return isOneTimePurchase ? "Expiry: Lifetime" : "Expiry: Managed by App Store"
+    }
+}
+
+@available(iOS 15.0, *)
+private extension Product.SubscriptionPeriod {
+    var displayLabel: String {
+        let unitName: String
+        switch unit {
+        case .day: unitName = value == 1 ? "day" : "days"
+        case .week: unitName = value == 1 ? "week" : "weeks"
+        case .month: unitName = value == 1 ? "month" : "months"
+        case .year: unitName = value == 1 ? "year" : "years"
+        @unknown default: unitName = "period"
+        }
+        return value == 1 ? unitName : "\(value) \(unitName)"
     }
 }

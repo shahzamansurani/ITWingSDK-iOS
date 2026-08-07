@@ -230,6 +230,13 @@ subscription or non-consumable entitlement is active. Mark an in-app product
 with `{"consumable": true}` in its admin metadata when it must be delivered
 once rather than restored as a permanent entitlement.
 
+Host apps can check the active state directly:
+
+```swift
+let adFree = ITWingSDK.isAdFree()
+let activePlan = ITWingSDK.currentSubscription()
+```
+
 ## VPN limitation on iOS
 
 The SDK supplies admin-managed VPN server data, categories, premium gating, ads, dialogs, and analytics. Apple requires each VPN host app to contain its own Network Extension target and entitlements, so the packet-tunnel provider cannot be shipped as a universally reusable normal app-library implementation.

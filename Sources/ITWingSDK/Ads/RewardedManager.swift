@@ -49,6 +49,7 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
             defer { self.loadingPlacements.remove(placementName) }
             do {
                 let ad = try await loadRewardedAd(unitId: unit.adUnitId)
+                guard ITWingSDK.canRequestRewardedAds() else { return }
                 ad.fullScreenContentDelegate = self
                 ad.paidEventHandler = { adValue in
                     AnalyticsClient.shared.track("ad_paid", properties: [
@@ -67,6 +68,20 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
                 AnalyticsClient.shared.track("rewarded_load_failed", properties: ["placement": placementName])
             }
         }
+    }
+
+    func clearCachedAds() {
+        ads.removeAll()
+        if !isPresentingRewarded && !presentationPending {
+            activeAd = nil
+        }
+        activeLoadToken = nil
+        activeLoadingHandle?.dismiss()
+        activeLoadingHandle = nil
+        waitingPlacements.removeAll()
+        waitTokens.removeAll()
+        loadingPlacements.removeAll()
+        lastLoadAttemptAt.removeAll()
     }
 
     private func canStartPreload(_ placementName: String) -> Bool {
@@ -443,6 +458,13 @@ public final class RewardedManager: NSObject, FullScreenContentDelegate {
                 let ad = try await loadRewardedAd(unitId: unit.adUnitId)
                 guard self.activeLoadToken == loadToken else { return }
                 self.activeLoadToken = nil
+                guard ITWingSDK.canRequestRewardedAds() else {
+                    loading.dismiss {
+                        self.activeLoadingHandle = nil
+                        self.finishFullScreen()
+                    }
+                    return
+                }
                 ad.fullScreenContentDelegate = self
                 loading.dismiss {
                     self.activeLoadingHandle = nil

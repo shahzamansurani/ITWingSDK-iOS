@@ -4,13 +4,14 @@ import UIKit
 
 public enum ITWingSDK {
     /// Semantic version sent to the IT Wing backend with every SDK request.
-    public static let version = "1.0.2"
+    public static let version = "1.0.3"
 
     private static let lock = NSLock()
     private static var repository: ConfigRepository?
     private static var currentConfig: ITWingConfig = .empty
     private static var adsBlockedByHost = false
     private static var adsBlockedByEntitlement = false
+    private static var adsBlockedByPurchaseFlow = false
 
     public static var interstitial = InterstitialManager(configProvider: { currentConfig })
     public static var rewarded = RewardedManager(configProvider: { currentConfig })
@@ -138,6 +139,19 @@ public enum ITWingSDK {
         currentConfig.subscriptions.products
     }
 
+    public static func isAdFree() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return adsBlockedByEntitlement
+    }
+
+    public static func currentSubscription() -> ITWingActiveSubscription? {
+        if #available(iOS 15.0, *) {
+            return ITWingSubscriptionManager.shared.activeSubscription
+        }
+        return nil
+    }
+
     public static func billingDiagnostics() -> [String: Any] {
         if #available(iOS 15.0, *) {
             return ITWingSubscriptionManager.shared.diagnostics()
@@ -168,7 +182,7 @@ public enum ITWingSDK {
     public static func canRequestAds() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return currentConfig.ads.globalEnabled && !adsBlockedByHost && !adsBlockedByEntitlement
+        return currentConfig.ads.globalEnabled && !adsBlockedByHost && !adsBlockedByEntitlement && !adsBlockedByPurchaseFlow
     }
 
     /// User-initiated rewarded ads must remain available while a host app has
@@ -176,7 +190,7 @@ public enum ITWingSDK {
     static func canRequestRewardedAds() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return currentConfig.ads.globalEnabled && !adsBlockedByEntitlement
+        return currentConfig.ads.globalEnabled && !adsBlockedByEntitlement && !adsBlockedByPurchaseFlow
     }
 
     static func setPremiumAdsBlocked(_ blocked: Bool) {
@@ -186,6 +200,29 @@ public enum ITWingSDK {
         lock.unlock()
         if changed {
             DispatchQueue.main.async {
+                if blocked {
+                    interstitial.clearCachedAds()
+                    rewarded.clearCachedAds()
+                    appOpen.clearCachedAds()
+                }
+                NotificationCenter.default.post(name: .itwingAdsAvailabilityDidChange, object: nil)
+                NotificationCenter.default.post(name: .itwingPremiumEntitlementDidChange, object: nil)
+            }
+        }
+    }
+
+    static func setPurchaseFlowAdsBlocked(_ blocked: Bool) {
+        lock.lock()
+        let changed = adsBlockedByPurchaseFlow != blocked
+        adsBlockedByPurchaseFlow = blocked
+        lock.unlock()
+        if changed {
+            DispatchQueue.main.async {
+                if blocked {
+                    interstitial.clearCachedAds()
+                    rewarded.clearCachedAds()
+                    appOpen.clearCachedAds()
+                }
                 NotificationCenter.default.post(name: .itwingAdsAvailabilityDidChange, object: nil)
             }
         }
@@ -343,4 +380,5 @@ public enum ITWingSDK {
 extension Notification.Name {
     static let itwingConfigDidChange = Notification.Name("ITWingSDK.configDidChange")
     static let itwingAdsAvailabilityDidChange = Notification.Name("ITWingSDK.adsAvailabilityDidChange")
+    static let itwingPremiumEntitlementDidChange = Notification.Name("ITWingSDK.premiumEntitlementDidChange")
 }

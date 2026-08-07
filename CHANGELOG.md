@@ -2,6 +2,13 @@
 
 All notable changes to ITWingSDK are documented here.
 
+## 1.0.3
+
+- Removed already-rendered inline ads and cleared cached full-screen ads immediately when a verified premium purchase disables ads.
+- Blocked SDK ads during the App Store checkout and verification flow so app-open ads cannot appear before entitlement activation finishes.
+- Added Android-parity active plan rows to the iOS premium view: plan, billing, price, and expiry.
+- Added `ITWingSDK.isAdFree()` and `ITWingSDK.currentSubscription()` helpers for iOS host apps.
+
 ## 1.0.2
 
 - Matched the iOS purchase dialog to Android billing behavior with plan, billing, and price rows.

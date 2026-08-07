@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'ITWingSDK'
-  s.version          = '1.0.2'
+  s.version          = '1.0.3'
   s.summary          = 'IT Wing Technologies dynamic ads and remote config SDK.'
   s.homepage         = 'https://itwingtechnologies.com'
   s.license          = { :type => 'Commercial' }
