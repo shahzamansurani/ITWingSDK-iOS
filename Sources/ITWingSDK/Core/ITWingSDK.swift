@@ -4,7 +4,7 @@ import UIKit
 
 public enum ITWingSDK {
     /// Semantic version sent to the IT Wing backend with every SDK request.
-    public static let version = "1.0.3"
+    public static let version = "1.0.4"
 
     private static let lock = NSLock()
     private static var repository: ConfigRepository?

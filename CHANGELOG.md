@@ -2,6 +2,11 @@
 
 All notable changes to ITWingSDK are documented here.
 
+## 1.0.4
+
+- Fixed `ITWingPremiumView` active-plan content being compressed or cropped in compact host layouts.
+- Added an intrinsic premium-card height and internal scrolling so plan details and buttons remain accessible on small screens.
+
 ## 1.0.3
 
 - Removed already-rendered inline ads and cleared cached full-screen ads immediately when a verified premium purchase disables ads.

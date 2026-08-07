@@ -569,6 +569,7 @@ open class ITWingPremiumView: UIView {
     private let messageLabel = UILabel()
     private let actionButton = UIButton(type: .system)
     private let restoreButton = UIButton(type: .system)
+    private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var observers: [NSObjectProtocol] = []
 
@@ -589,21 +590,31 @@ open class ITWingPremiumView: UIView {
         blur.clipsToBounds = true
         addSubview(blur)
 
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.alwaysBounceVertical = false
+        scrollView.showsVerticalScrollIndicator = true
+        scrollView.clipsToBounds = true
+        blur.contentView.addSubview(scrollView)
+
         stack.axis = .vertical
-        stack.spacing = 10
+        stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
-        blur.contentView.addSubview(stack)
+        scrollView.addSubview(stack)
 
         badgeLabel.font = .systemFont(ofSize: 12, weight: .bold)
         badgeLabel.textAlignment = .center
         badgeLabel.layer.cornerRadius = 10
         badgeLabel.clipsToBounds = true
+        badgeLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
         titleLabel.textColor = ITWingSDK.uiColor("premium_title_color", defaultValue: ITWingSDK.uiColor("text_color", defaultValue: .label))
+        titleLabel.numberOfLines = 0
+        titleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
         subtitleLabel.font = .systemFont(ofSize: 14, weight: .regular)
         subtitleLabel.textColor = ITWingSDK.uiColor("premium_text_color", defaultValue: ITWingSDK.uiColor("secondary_text_color", defaultValue: .secondaryLabel))
         subtitleLabel.numberOfLines = 0
+        subtitleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         detailsStack.axis = .vertical
         detailsStack.spacing = 5
@@ -611,6 +622,7 @@ open class ITWingPremiumView: UIView {
             $0.font = .systemFont(ofSize: 13, weight: .semibold)
             $0.textColor = ITWingSDK.uiColor("premium_text_color", defaultValue: ITWingSDK.uiColor("secondary_text_color", defaultValue: .secondaryLabel))
             $0.numberOfLines = 0
+            $0.setContentCompressionResistancePriority(.required, for: .vertical)
             detailsStack.addArrangedSubview($0)
         }
 
@@ -618,12 +630,14 @@ open class ITWingPremiumView: UIView {
         messageLabel.textColor = ITWingSDK.uiColor("primary", defaultValue: .systemBlue)
         messageLabel.numberOfLines = 0
         messageLabel.isHidden = true
+        messageLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         actionButton.layer.cornerRadius = 13
         actionButton.backgroundColor = ITWingSDK.uiColor("premium_button_color", defaultValue: ITWingSDK.uiColor("primary", defaultValue: .systemBlue))
         actionButton.setTitleColor(ITWingSDK.uiColor("premium_button_text_color", defaultValue: .white), for: .normal)
         actionButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
         actionButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        actionButton.setContentCompressionResistancePriority(.required, for: .vertical)
         actionButton.addTarget(self, action: #selector(openPurchaseDialog), for: .touchUpInside)
 
         restoreButton.layer.cornerRadius = 13
@@ -632,6 +646,7 @@ open class ITWingPremiumView: UIView {
         restoreButton.setTitleColor(ITWingSDK.uiColor("premium_button_color", defaultValue: ITWingSDK.uiColor("primary", defaultValue: .systemBlue)), for: .normal)
         restoreButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         restoreButton.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        restoreButton.setContentCompressionResistancePriority(.required, for: .vertical)
         restoreButton.addTarget(self, action: #selector(restorePurchases), for: .touchUpInside)
 
         stack.addArrangedSubview(badgeLabel)
@@ -647,10 +662,15 @@ open class ITWingPremiumView: UIView {
             blur.trailingAnchor.constraint(equalTo: trailingAnchor),
             blur.topAnchor.constraint(equalTo: topAnchor),
             blur.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: blur.contentView.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor, constant: -16),
+            scrollView.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: blur.contentView.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -14),
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 14),
+            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -14),
+            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -28),
         ])
         observers = [.itwingPremiumEntitlementDidChange, .itwingAdsAvailabilityDidChange, .itwingConfigDidChange].map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -661,6 +681,21 @@ open class ITWingPremiumView: UIView {
     }
 
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+
+    open override var intrinsicContentSize: CGSize {
+        let compactHeight: CGFloat = ITWingSubscriptionManager.shared.activeSubscription == nil ? 206 : 286
+        return CGSize(width: UIView.noIntrinsicMetric, height: compactHeight)
+    }
+
+    open override func layoutSubviews() {
+        super.layoutSubviews()
+        let contentHeight = stack.systemLayoutSizeFitting(
+            CGSize(width: max(0, bounds.width - 28), height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height + 28
+        scrollView.isScrollEnabled = contentHeight > bounds.height + 1
+    }
 
     open override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -700,6 +735,9 @@ open class ITWingPremiumView: UIView {
             restoreButton.setTitle("Restore purchases", for: .normal)
             restoreButton.isHidden = false
         }
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+        layoutIfNeeded()
     }
 
     private func applyColors() {
