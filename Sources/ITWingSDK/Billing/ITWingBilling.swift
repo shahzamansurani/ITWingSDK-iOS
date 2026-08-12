@@ -614,7 +614,8 @@ private final class ITWingPurchaseViewController: UIViewController {
             urlString: urlString,
             content: ITWingSDK.legalContent(kind)
         )
-        present(UINavigationController(rootViewController: controller), animated: true)
+        controller.modalPresentationStyle = .fullScreen
+        present(controller, animated: true)
     }
 
     private func dismissResult(_ result: Bool) {
@@ -646,28 +647,107 @@ private final class ITWingLegalViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = legalTitle
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .done,
-            target: self,
-            action: #selector(close)
-        )
+        view.backgroundColor = .systemBackground
+
+        let toolbar = UIView()
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.backgroundColor = .systemBackground
+
+        let backButton = UIButton(type: .system)
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
+        backButton.tintColor = ITWingSDK.uiColor("primary", defaultValue: .systemBlue)
+        backButton.accessibilityLabel = "Back"
+        backButton.addTarget(self, action: #selector(close), for: .touchUpInside)
+
+        let titleLabel = UILabel()
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.text = legalTitle
+        titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        titleLabel.textColor = .label
+        titleLabel.textAlignment = .center
+        titleLabel.adjustsFontSizeToFitWidth = true
+        titleLabel.minimumScaleFactor = 0.8
+
+        let separator = UIView()
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        separator.backgroundColor = .separator
+
+        toolbar.addSubview(backButton)
+        toolbar.addSubview(titleLabel)
+        toolbar.addSubview(separator)
+
         let webView = WKWebView(frame: .zero)
         webView.translatesAutoresizingMaskIntoConstraints = false
+        webView.isOpaque = false
+        webView.backgroundColor = .systemBackground
+        webView.scrollView.backgroundColor = .systemBackground
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        view.addSubview(toolbar)
         view.addSubview(webView)
         NSLayoutConstraint.activate([
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: 56),
+            backButton.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 8),
+            backButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
+            backButton.widthAnchor.constraint(equalToConstant: 44),
+            backButton.heightAnchor.constraint(equalToConstant: 44),
+            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: backButton.trailingAnchor, constant: 8),
+            titleLabel.centerXAnchor.constraint(equalTo: toolbar.centerXAnchor),
+            titleLabel.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: toolbar.trailingAnchor, constant: -52),
+            separator.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor),
+            separator.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        if let urlString, let url = URL(string: urlString) {
+        if let content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let kind = legalTitle.lowercased().contains("privacy") ? "privacy" : "terms"
+            let format = ITWingSDK.config.app.legal[kind]?.format ?? "text"
+            webView.loadHTMLString(styledLegalHTML(content: content, format: format), baseURL: nil)
+        } else if let urlString, let url = URL(string: urlString) {
             webView.load(URLRequest(url: url))
-        } else if let content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            webView.loadHTMLString(content, baseURL: nil)
         } else {
-            webView.loadHTMLString("<html><body><p>This document is temporarily unavailable.</p></body></html>", baseURL: nil)
+            webView.loadHTMLString(styledLegalHTML(content: "This document is temporarily unavailable.", format: "text"), baseURL: nil)
         }
+    }
+
+    private func styledLegalHTML(content: String, format: String) -> String {
+        let style = """
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+        <style>
+        :root{color-scheme:light}*{box-sizing:border-box}
+        body{margin:0;padding:24px 20px 40px;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;font-size:16px;line-height:1.62;color:#111827;background:#fff;overflow-wrap:anywhere}
+        h1{font-size:26px;line-height:1.22;margin:0 0 20px;color:#111827}h2{font-size:20px;line-height:1.3;margin:28px 0 10px;color:#111827}h3{font-size:17px;line-height:1.35;margin:22px 0 8px;color:#111827}
+        p{margin:0 0 14px}ul,ol{padding-left:24px;margin:8px 0 18px}li{margin:0 0 8px}a{color:#4f46e5;text-decoration:underline;font-weight:600}strong,b{color:#111827}hr{border:0;border-top:1px solid #e5e7eb;margin:24px 0}
+        </style>
+        """
+        if format.lowercased() == "html" {
+            if content.range(of: "<html", options: .caseInsensitive) != nil {
+                if let headEnd = content.range(of: "</head>", options: .caseInsensitive) {
+                    var document = content
+                    document.insert(contentsOf: style, at: headEnd.lowerBound)
+                    return document
+                }
+                return content.replacingOccurrences(of: "<html>", with: "<html><head>\(style)</head>", options: .caseInsensitive)
+            }
+            return "<html><head>\(style)</head><body>\(content)</body></html>"
+        }
+        let escaped = content
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        let paragraphs = escaped
+            .components(separatedBy: "\n\n")
+            .map { "<p>\($0.replacingOccurrences(of: "\n", with: "<br>"))</p>" }
+            .joined()
+        return "<html><head>\(style)</head><body>\(paragraphs)</body></html>"
     }
 
     @objc private func close() {
