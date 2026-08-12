@@ -682,8 +682,25 @@ private extension String {
     }
 }
 
+private final class ITWingInsetLabel: UILabel {
+    var contentInsets = UIEdgeInsets.zero
+
+    override func drawText(in rect: CGRect) {
+        super.drawText(in: rect.inset(by: contentInsets))
+    }
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(
+            width: size.width + contentInsets.left + contentInsets.right,
+            height: size.height + contentInsets.top + contentInsets.bottom
+        )
+    }
+}
+
 open class ITWingPremiumView: UIView {
-    private let badgeLabel = UILabel()
+    private let badgeLabel = ITWingInsetLabel()
+    private let badgeRow = UIStackView()
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let detailsStack = UIStackView()
@@ -709,17 +726,20 @@ open class ITWingPremiumView: UIView {
     }
 
     private func commonInit() {
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.layer.cornerRadius = 20
-        blur.clipsToBounds = true
-        addSubview(blur)
+        let card = UIView()
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.backgroundColor = ITWingSDK.uiColor("premium_card_background_color", defaultValue: .secondarySystemBackground)
+        card.layer.cornerRadius = 20
+        card.layer.borderWidth = 1
+        card.layer.borderColor = ITWingSDK.uiColor("premium_card_border_color", defaultValue: .separator).cgColor
+        card.clipsToBounds = true
+        addSubview(card)
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.alwaysBounceVertical = false
         scrollView.showsVerticalScrollIndicator = true
         scrollView.clipsToBounds = true
-        blur.contentView.addSubview(scrollView)
+        card.addSubview(scrollView)
 
         stack.axis = .vertical
         stack.spacing = 8
@@ -730,7 +750,17 @@ open class ITWingPremiumView: UIView {
         badgeLabel.textAlignment = .center
         badgeLabel.layer.cornerRadius = 10
         badgeLabel.clipsToBounds = true
+        badgeLabel.isUserInteractionEnabled = false
+        badgeLabel.setContentHuggingPriority(.required, for: .horizontal)
+        badgeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         badgeLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        badgeLabel.contentInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+
+        badgeRow.axis = .horizontal
+        badgeRow.alignment = .center
+        badgeRow.distribution = .fill
+        badgeRow.addArrangedSubview(badgeLabel)
+        badgeRow.addArrangedSubview(UIView())
 
         titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
         titleLabel.textColor = ITWingSDK.uiColor("premium_title_color", defaultValue: ITWingSDK.uiColor("text_color", defaultValue: .label))
@@ -774,7 +804,7 @@ open class ITWingPremiumView: UIView {
         restoreButton.setContentCompressionResistancePriority(.required, for: .vertical)
         restoreButton.addTarget(self, action: #selector(restorePurchases), for: .touchUpInside)
 
-        stack.addArrangedSubview(badgeLabel)
+        stack.addArrangedSubview(badgeRow)
         stack.addArrangedSubview(titleLabel)
         stack.addArrangedSubview(subtitleLabel)
         stack.addArrangedSubview(detailsStack)
@@ -783,14 +813,14 @@ open class ITWingPremiumView: UIView {
         stack.addArrangedSubview(restoreButton)
 
         NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blur.topAnchor.constraint(equalTo: topAnchor),
-            blur.bottomAnchor.constraint(equalTo: bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: blur.contentView.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor),
+            card.leadingAnchor.constraint(equalTo: leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: trailingAnchor),
+            card.topAnchor.constraint(equalTo: topAnchor),
+            card.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: card.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 14),
             stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -14),
             stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 14),
@@ -808,8 +838,23 @@ open class ITWingPremiumView: UIView {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     open override var intrinsicContentSize: CGSize {
-        let compactHeight: CGFloat = ITWingSubscriptionManager.shared.activeSubscription == nil ? 206 : 286
-        return CGSize(width: UIView.noIntrinsicMetric, height: compactHeight)
+        let fittingWidth = bounds.width > 0 ? bounds.width : 320
+        let contentHeight = stack.systemLayoutSizeFitting(
+            CGSize(width: max(0, fittingWidth - 28), height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height + 28
+        return CGSize(width: UIView.noIntrinsicMetric, height: ceil(contentHeight))
+    }
+
+    open override func sizeThatFits(_ size: CGSize) -> CGSize {
+        let fittingWidth = size.width > 0 && size.width < .greatestFiniteMagnitude ? size.width : 320
+        let contentHeight = stack.systemLayoutSizeFitting(
+            CGSize(width: max(0, fittingWidth - 28), height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height + 28
+        return CGSize(width: fittingWidth, height: ceil(contentHeight))
     }
 
     open override func layoutSubviews() {
@@ -872,7 +917,9 @@ open class ITWingPremiumView: UIView {
         restoreButton.layer.borderColor = primary.cgColor
         restoreButton.setTitleColor(primary, for: .normal)
         badgeLabel.textColor = primary
-        badgeLabel.backgroundColor = primary.withAlphaComponent(0.12)
+        badgeLabel.backgroundColor = .clear
+        badgeLabel.layer.borderWidth = 1
+        badgeLabel.layer.borderColor = primary.withAlphaComponent(0.45).cgColor
     }
 
     @objc private func openPurchaseDialog() {
