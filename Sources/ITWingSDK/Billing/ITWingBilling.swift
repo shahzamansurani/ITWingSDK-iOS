@@ -1,5 +1,6 @@
 import StoreKit
 import UIKit
+import WebKit
 
 public struct ITWingActiveSubscription: Sendable {
     public let productId: String
@@ -93,11 +94,22 @@ public final class ITWingSubscriptionManager {
                   case .verified(let transaction) = verification else {
                 return false
             }
-            guard await verifyWithBackend(transaction: transaction, signedTransaction: verification.jwsRepresentation, storeProduct: product) else {
-                await MainActor.run {
-                    ITWingUI.showError(from: presenter, title: "Verification failed", message: "The App Store completed the purchase, but secure verification is not available. Use Restore Purchases when your connection is available.")
-                }
-                return false
+            // StoreKit's `.verified` result is the cryptographic purchase
+            // authority on-device. Backend verification records and syncs the
+            // entitlement across IT Wing services, but a temporary backend or
+            // network failure must not turn a completed App Store purchase into
+            // an app-visible failure. `sync()` retries this acknowledgement on
+            // launch and restore.
+            let backendVerified = await verifyWithBackend(
+                transaction: transaction,
+                signedTransaction: verification.jwsRepresentation,
+                storeProduct: product
+            )
+            if !backendVerified {
+                AnalyticsClient.shared.track("app_store_verification_deferred", properties: [
+                    "product_id": transaction.productID,
+                    "transaction_id": String(transaction.id),
+                ])
             }
             await transaction.finish()
             if config.consumable {
@@ -162,10 +174,13 @@ public final class ITWingSubscriptionManager {
 
         Task {
             let productsById = await self.loadStoreProducts(configs: configs)
+            let availableConfigs = configs.filter { productsById[$0.productId] != nil }
             let dialog = ITWingPurchaseViewController(
-                configs: configs,
+                configs: availableConfigs,
                 storeProducts: productsById,
-                storeKitMessage: self.lastStoreKitMessage,
+                storeKitMessage: availableConfigs.isEmpty
+                    ? "Subscriptions are temporarily unavailable. Please try again later."
+                    : nil,
                 activeSubscription: activeSubscription,
                 purchase: { [weak self] config, controller in
                     guard let self else { return false }
@@ -178,9 +193,11 @@ public final class ITWingSubscriptionManager {
                 completion: completion
             )
             dialog.modalPresentationStyle = .formSheet
+            dialog.preferredContentSize = CGSize(width: 620, height: 760)
             if let sheet = dialog.sheetPresentationController {
-                sheet.detents = [.medium(), .large()]
+                sheet.detents = [.large()]
                 sheet.prefersGrabberVisible = true
+                sheet.prefersScrollingExpandsWhenScrolledToEdge = false
             }
             presenter.present(dialog, animated: true)
         }
@@ -326,14 +343,19 @@ private final class ITWingPurchaseViewController: UIViewController {
         let header = UIStackView()
         header.axis = .horizontal
         header.alignment = .center
+        header.spacing = 8
         let heading = UILabel()
         heading.text = "Choose your premium plan"
         heading.font = .systemFont(ofSize: 22, weight: .bold)
         heading.textColor = ITWingSDK.uiColor("premium_title_color", defaultValue: .label)
+        heading.numberOfLines = 2
+        heading.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let close = UIButton(type: .system)
         close.setImage(UIImage(systemName: "xmark"), for: .normal)
         close.tintColor = ITWingSDK.uiColor("secondary_text_color", defaultValue: .secondaryLabel)
         close.accessibilityLabel = "Close"
+        close.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        close.heightAnchor.constraint(equalToConstant: 44).isActive = true
         close.addAction(UIAction { [weak self] _ in self?.dismissResult(false) }, for: .touchUpInside)
         header.addArrangedSubview(heading)
         header.addArrangedSubview(close)
@@ -377,12 +399,32 @@ private final class ITWingPurchaseViewController: UIViewController {
         }, for: .touchUpInside)
         content.addArrangedSubview(restoreButton)
 
-        let cancel = UIButton(type: .system)
-        cancel.setTitle("Cancel", for: .normal)
-        cancel.setTitleColor(.secondaryLabel, for: .normal)
-        cancel.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        cancel.addAction(UIAction { [weak self] _ in self?.dismissResult(false) }, for: .touchUpInside)
-        content.addArrangedSubview(cancel)
+        let legalLinks = UIStackView()
+        legalLinks.axis = .horizontal
+        legalLinks.alignment = .center
+        legalLinks.distribution = .fillEqually
+        legalLinks.spacing = 12
+        let privacy = legalButton(title: "Privacy Policy", primary: primary)
+        privacy.addAction(UIAction { [weak self] _ in
+            self?.presentLegal(kind: "privacy", title: "Privacy Policy")
+        }, for: .touchUpInside)
+        let terms = legalButton(title: "Terms of Use (EULA)", primary: primary)
+        terms.addAction(UIAction { [weak self] _ in
+            self?.presentLegal(kind: "terms", title: "Terms of Use (EULA)")
+        }, for: .touchUpInside)
+        legalLinks.addArrangedSubview(privacy)
+        legalLinks.addArrangedSubview(terms)
+        content.addArrangedSubview(legalLinks)
+
+        let renewal = label(
+            "Subscriptions renew automatically unless cancelled at least 24 hours before the end of the current period. Manage or cancel subscriptions in your App Store account settings.",
+            size: 12,
+            weight: .regular,
+            color: .secondaryLabel
+        )
+        renewal.numberOfLines = 0
+        renewal.textAlignment = .center
+        content.addArrangedSubview(renewal)
 
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
@@ -414,27 +456,28 @@ private final class ITWingPurchaseViewController: UIViewController {
         card.layer.borderWidth = 1
         card.layer.borderColor = ITWingSDK.uiColor("premium_card_border_color", defaultValue: .separator).cgColor
 
-        let top = UIStackView()
-        top.axis = .horizontal
-        top.alignment = .firstBaseline
-        top.spacing = 8
         let name = label(config.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? (product?.displayName ?? config.productId) : config.name, size: 16, weight: .bold, color: .label)
         name.numberOfLines = 2
-        let price = label(product?.displayPrice ?? configuredPrice(config), size: 17, weight: .bold, color: primary)
-        price.setContentCompressionResistancePriority(.required, for: .horizontal)
-        top.addArrangedSubview(name)
-        top.addArrangedSubview(price)
-        card.addArrangedSubview(top)
+        name.textAlignment = .center
+        card.addArrangedSubview(name)
+        let billing = config.productType == "inapp" || config.billingPeriod == "lifetime"
+            ? "Lifetime"
+            : periodLabel(config: config, product: product)
+        let price = label("\(product?.displayPrice ?? configuredPrice(config)) billed \(billing.lowercased())", size: 28, weight: .heavy, color: primary)
+        price.numberOfLines = 2
+        price.textAlignment = .center
+        price.adjustsFontSizeToFitWidth = true
+        price.minimumScaleFactor = 0.75
+        price.setContentCompressionResistancePriority(.required, for: .vertical)
+        card.addArrangedSubview(price)
 
         if let offer = offerText(config: config, product: product) {
             card.addArrangedSubview(label(offer, size: 13, weight: .semibold, color: primary))
         }
         let oneTime = config.productType == "inapp" || config.billingPeriod == "lifetime"
         let productType = oneTime ? "One-time purchase" : "Subscription"
-        let billing = oneTime ? "Lifetime" : periodLabel(config: config, product: product)
         card.addArrangedSubview(label("Plan: \(config.name.nonEmpty ?? product?.displayName ?? config.productId)", size: 13, weight: .semibold, color: .secondaryLabel))
         card.addArrangedSubview(label("Billing: \(productType) | \(billing)", size: 13, weight: .semibold, color: .secondaryLabel))
-        card.addArrangedSubview(label("Price: \(product?.displayPrice ?? configuredPrice(config))", size: 13, weight: .semibold, color: .secondaryLabel))
         let description = config.productDescription?.nonEmpty
             ?? product?.description.nonEmpty
             ?? config.entitlements?.keys.map { $0.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ").nonEmpty
@@ -538,6 +581,28 @@ private final class ITWingPurchaseViewController: UIViewController {
         return button
     }
 
+    private func legalButton(title: String, primary: UIColor) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setTitle(title, for: .normal)
+        button.setTitleColor(primary, for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        button.titleLabel?.numberOfLines = 2
+        button.titleLabel?.textAlignment = .center
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return button
+    }
+
+    private func presentLegal(kind: String, title: String) {
+        let urlString = ITWingSDK.appUrl(kind)
+            ?? (kind == "terms" ? "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/" : nil)
+        let controller = ITWingLegalViewController(
+            title: title,
+            urlString: urlString,
+            content: ITWingSDK.legalContent(kind)
+        )
+        present(UINavigationController(rootViewController: controller), animated: true)
+    }
+
     private func dismissResult(_ result: Bool) {
         deliver(result)
         dismiss(animated: true)
@@ -547,6 +612,52 @@ private final class ITWingPurchaseViewController: UIViewController {
         guard !deliveredResult else { return }
         deliveredResult = true
         completion?(result)
+    }
+}
+
+@available(iOS 15.0, *)
+private final class ITWingLegalViewController: UIViewController {
+    private let legalTitle: String
+    private let urlString: String?
+    private let content: String?
+
+    init(title: String, urlString: String?, content: String?) {
+        legalTitle = title
+        self.urlString = urlString
+        self.content = content
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = legalTitle
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .done,
+            target: self,
+            action: #selector(close)
+        )
+        let webView = WKWebView(frame: .zero)
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        if let urlString, let url = URL(string: urlString) {
+            webView.load(URLRequest(url: url))
+        } else if let content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            webView.loadHTMLString(content, baseURL: nil)
+        } else {
+            webView.loadHTMLString("<html><body><p>This document is temporarily unavailable.</p></body></html>", baseURL: nil)
+        }
+    }
+
+    @objc private func close() {
+        dismiss(animated: true)
     }
 }
 
