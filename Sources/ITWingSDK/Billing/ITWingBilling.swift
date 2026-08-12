@@ -174,13 +174,19 @@ public final class ITWingSubscriptionManager {
 
         Task {
             let productsById = await self.loadStoreProducts(configs: configs)
-            let availableConfigs = configs.filter { productsById[$0.productId] != nil }
+            // Never turn a transient StoreKit/App Store catalog failure into an
+            // empty paywall. Admin configuration remains the source of which
+            // plans are offered; StoreKit supplies the authoritative localized
+            // price and is still required before a purchase can complete.
+            let unavailableProductIds = configs
+                .map(\.productId)
+                .filter { productsById[$0] == nil }
             let dialog = ITWingPurchaseViewController(
-                configs: availableConfigs,
+                configs: configs,
                 storeProducts: productsById,
-                storeKitMessage: availableConfigs.isEmpty
-                    ? "Subscriptions are temporarily unavailable. Please try again later."
-                    : nil,
+                storeKitMessage: unavailableProductIds.isEmpty
+                    ? nil
+                    : self.missingStoreKitProductsMessage(unavailableProductIds),
                 activeSubscription: activeSubscription,
                 purchase: { [weak self] config, controller in
                     guard let self else { return false }
@@ -263,23 +269,31 @@ public final class ITWingSubscriptionManager {
             return [:]
         }
 
-        do {
-            let products = try await Product.products(for: productIds)
-            let productsById = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
-            let loadedIds = Set(productsById.keys)
-            let missingIds = productIds.filter { !loadedIds.contains($0) }
-            await MainActor.run {
-                self.loadedStoreProductIds = loadedIds
-                self.lastStoreKitMessage = missingIds.isEmpty ? nil : self.missingStoreKitProductsMessage(missingIds)
+        var lastError: Error?
+        for attempt in 1...3 {
+            do {
+                let products = try await Product.products(for: productIds)
+                let productsById = Dictionary(uniqueKeysWithValues: products.map { ($0.id, $0) })
+                if !productsById.isEmpty || attempt == 3 {
+                    let loadedIds = Set(productsById.keys)
+                    let missingIds = productIds.filter { !loadedIds.contains($0) }
+                    await MainActor.run {
+                        self.loadedStoreProductIds = loadedIds
+                        self.lastStoreKitMessage = missingIds.isEmpty ? nil : self.missingStoreKitProductsMessage(missingIds)
+                    }
+                    return productsById
+                }
+            } catch {
+                lastError = error
+                if attempt == 3 { break }
             }
-            return productsById
-        } catch {
-            await MainActor.run {
-                self.loadedStoreProductIds = []
-                self.lastStoreKitMessage = "StoreKit could not load App Store products: \(error.localizedDescription)"
-            }
-            return [:]
+            try? await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
         }
+        await MainActor.run {
+            self.loadedStoreProductIds = []
+            self.lastStoreKitMessage = "StoreKit could not load App Store products: \(lastError?.localizedDescription ?? "Unknown App Store error")"
+        }
+        return [:]
     }
 
     private func storeKitUnavailableMessage(for config: SubscriptionProductConfig) -> String {
