@@ -172,6 +172,11 @@ public final class ITWingSubscriptionManager {
             return
         }
 
+        let loading = ITWingPurchaseLoadingViewController()
+        loading.modalPresentationStyle = .overFullScreen
+        loading.modalTransitionStyle = .crossDissolve
+        presenter.present(loading, animated: true)
+
         Task {
             let productsById = await self.loadStoreProducts(configs: configs)
             // Never turn a transient StoreKit/App Store catalog failure into an
@@ -205,7 +210,18 @@ public final class ITWingSubscriptionManager {
                 sheet.prefersGrabberVisible = true
                 sheet.prefersScrollingExpandsWhenScrolledToEdge = false
             }
-            presenter.present(dialog, animated: true)
+            let presentDialog = {
+                guard presenter.viewIfLoaded?.window != nil else {
+                    completion?(false)
+                    return
+                }
+                presenter.present(dialog, animated: true)
+            }
+            if loading.presentingViewController != nil {
+                loading.dismiss(animated: false, completion: presentDialog)
+            } else {
+                presentDialog()
+            }
         }
     }
 
@@ -304,6 +320,53 @@ public final class ITWingSubscriptionManager {
     private func missingStoreKitProductsMessage(_ productIds: [String]) -> String {
         let ids = productIds.joined(separator: ", ")
         return "The App Store did not return product details for \(ids). Confirm the bundle ID, App Store Connect app record, product status, signed build/TestFlight or StoreKit configuration file, Paid Apps agreements, and exact product ID."
+    }
+}
+
+@available(iOS 15.0, *)
+private final class ITWingPurchaseLoadingViewController: UIViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+
+        let card = UIView()
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.backgroundColor = .secondarySystemBackground
+        card.layer.cornerRadius = 18
+        card.layer.shadowColor = UIColor.black.cgColor
+        card.layer.shadowOpacity = 0.16
+        card.layer.shadowRadius = 18
+        card.layer.shadowOffset = CGSize(width: 0, height: 8)
+
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        spinner.color = ITWingSDK.uiColor("primary", defaultValue: .systemBlue)
+        spinner.startAnimating()
+
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = "Loading App Store plans…"
+        label.font = .systemFont(ofSize: 16, weight: .semibold)
+        label.textColor = .label
+        label.numberOfLines = 0
+        label.textAlignment = .center
+
+        view.addSubview(card)
+        card.addSubview(spinner)
+        card.addSubview(label)
+        NSLayoutConstraint.activate([
+            card.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            card.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 28),
+            card.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -28),
+            card.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+            spinner.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
+            spinner.centerXAnchor.constraint(equalTo: card.centerXAnchor),
+            label.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 14),
+            label.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
+            label.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -22),
+        ])
     }
 }
 
@@ -823,6 +886,7 @@ open class ITWingPremiumView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var observers: [NSObjectProtocol] = []
+    private var isOpeningPlans = false
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1032,9 +1096,15 @@ open class ITWingPremiumView: UIView {
     }
 
     @objc private func openPurchaseDialog() {
+        guard !isOpeningPlans else { return }
         guard let presenter = UIApplication.shared.itwingVisibleViewController else { return }
         if #available(iOS 15.0, *) {
+            isOpeningPlans = true
+            actionButton.isEnabled = false
+            actionButton.alpha = 0.72
+            actionButton.setTitle("Loading plans…", for: .normal)
             ITWingSubscriptionManager.shared.showPurchaseDialog(from: presenter) { [weak self] _ in
+                self?.isOpeningPlans = false
                 self?.refresh()
             }
         } else {
