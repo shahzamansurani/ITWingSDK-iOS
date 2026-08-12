@@ -719,6 +719,7 @@ private final class ITWingLegalViewController: UIViewController {
     }
 
     private func styledLegalHTML(content: String, format: String) -> String {
+        let appleEULAURL = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/"
         let style = """
         <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
         <style>
@@ -729,20 +730,48 @@ private final class ITWingLegalViewController: UIViewController {
         </style>
         """
         if format.lowercased() == "html" {
-            if content.range(of: "<html", options: .caseInsensitive) != nil {
-                if let headEnd = content.range(of: "</head>", options: .caseInsensitive) {
-                    var document = content
+            var linkedContent = content
+            if linkedContent.range(of: appleEULAURL, options: .caseInsensitive) == nil,
+               linkedContent.range(of: "Apple Standard EULA", options: .caseInsensitive) != nil {
+                linkedContent = linkedContent.replacingOccurrences(
+                    of: "Apple Standard EULA",
+                    with: "<a href=\"\(appleEULAURL)\">Apple Standard EULA</a>",
+                    options: .caseInsensitive
+                )
+            } else if linkedContent.range(of: "href=\"\(appleEULAURL)", options: .caseInsensitive) == nil,
+                      linkedContent.range(of: "href='\(appleEULAURL)", options: .caseInsensitive) == nil {
+                linkedContent = linkedContent.replacingOccurrences(
+                    of: appleEULAURL,
+                    with: "<a href=\"\(appleEULAURL)\">Apple Standard EULA</a>",
+                    options: .caseInsensitive
+                )
+            }
+            if linkedContent.range(of: "<html", options: .caseInsensitive) != nil {
+                if let headEnd = linkedContent.range(of: "</head>", options: .caseInsensitive) {
+                    var document = linkedContent
                     document.insert(contentsOf: style, at: headEnd.lowerBound)
                     return document
                 }
-                return content.replacingOccurrences(of: "<html>", with: "<html><head>\(style)</head>", options: .caseInsensitive)
+                return linkedContent.replacingOccurrences(of: "<html>", with: "<html><head>\(style)</head>", options: .caseInsensitive)
             }
-            return "<html><head>\(style)</head><body>\(content)</body></html>"
+            return "<html><head>\(style)</head><body>\(linkedContent)</body></html>"
         }
-        let escaped = content
+        var escaped = content
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
+        escaped = escaped.replacingOccurrences(
+            of: appleEULAURL,
+            with: "<a href=\"\(appleEULAURL)\">Apple Standard EULA</a>",
+            options: .caseInsensitive
+        )
+        if escaped.range(of: "href=\"\(appleEULAURL)", options: .caseInsensitive) == nil {
+            escaped = escaped.replacingOccurrences(
+                of: "Apple Standard EULA",
+                with: "<a href=\"\(appleEULAURL)\">Apple Standard EULA</a>",
+                options: .caseInsensitive
+            )
+        }
         let paragraphs = escaped
             .components(separatedBy: "\n\n")
             .map { "<p>\($0.replacingOccurrences(of: "\n", with: "<br>"))</p>" }
