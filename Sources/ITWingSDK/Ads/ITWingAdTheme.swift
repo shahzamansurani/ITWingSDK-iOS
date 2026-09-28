@@ -152,7 +152,7 @@ enum ITWingAdTheme {
     private static func surfacePreset(keys: [String], metadata: [String: String?], provider: (String) -> String, presets: [String: CGFloat], maximum: CGFloat) -> CGFloat {
         for key in keys {
             let value = (metadata[key] ?? nil) ?? provider(key)
-            guard let value, !value.isEmpty else { continue }
+            guard !value.isEmpty else { continue }
             if let preset = presets[value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] { return preset }
             let rawNumber = value.replacingOccurrences(of: "dp", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
             if let number = Double(rawNumber), number.isFinite, number >= 0, number <= Double(maximum) { return CGFloat(number) }
