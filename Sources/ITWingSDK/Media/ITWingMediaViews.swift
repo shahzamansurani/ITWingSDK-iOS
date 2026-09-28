@@ -105,7 +105,9 @@ open class ITWingMediaCollectionView: UICollectionView, UICollectionViewDataSour
     }
 
     public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = dequeueReusableCell(withReuseIdentifier: "ITWingMediaCell", for: indexPath) as! ITWingMediaCell
+        guard let cell = dequeueReusableCell(withReuseIdentifier: "ITWingMediaCell", for: indexPath) as? ITWingMediaCell else {
+            return UICollectionViewCell()
+        }
         cell.bind(items[indexPath.item], showTitle: showTitle)
         return cell
     }
@@ -232,7 +234,9 @@ open class ITWingCategoriesView: UICollectionView, UICollectionViewDataSource, U
     }
 
     public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = dequeueReusableCell(withReuseIdentifier: "ITWingCategoryCell", for: indexPath) as! ITWingCategoryCell
+        guard let cell = dequeueReusableCell(withReuseIdentifier: "ITWingCategoryCell", for: indexPath) as? ITWingCategoryCell else {
+            return UICollectionViewCell()
+        }
         cell.bind(categories[indexPath.item], selected: selectedIndex == indexPath.item, displayMode: displayMode)
         return cell
     }

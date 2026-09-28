@@ -72,7 +72,7 @@ final class ConfigRepository {
             MediaDiskCache.shared.saveResponse(response, key: cacheKey)
             return response
         } catch {
-            if let cached = MediaDiskCache.shared.loadResponse(key: cacheKey) {
+            if let cached = await MediaDiskCache.shared.loadResponse(key: cacheKey) {
                 return cached
             }
             throw error

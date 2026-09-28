@@ -1,5 +1,7 @@
 # ITWingSDK for iOS
 
+The iOS package version remains on its existing independent semantic-version line; the v1.49 Android release candidate pairs with iOS SDK version **1.6.6**. No v1.48 host integration changes are required. See [CHANGELOG.md](CHANGELOG.md).
+
 `ITWingSDK` is the reusable iOS SDK for the IT Wing administration platform. It mirrors the Android SDK’s host-app model: initialize with one SDK key, then control ads, startup flow, legal content, UI colors, dialogs, media libraries, VPN server data, analytics, notifications, and subscriptions from the admin panel.
 
 An executable SwiftUI demonstration is included in
@@ -24,7 +26,7 @@ https://github.com/shahzamansurani/ITWingSDK-iOS.git
 ```
 
 Select a tagged version and add the `ITWingSDK` product to the app target.
-The repository must have a semantic version tag such as `1.0.0` before Xcode
+The repository must have a semantic version tag such as `1.6.6` before Xcode
 can resolve a version-based dependency.
 
 For a `Package.swift` host:
@@ -33,7 +35,7 @@ For a `Package.swift` host:
 dependencies: [
     .package(
         url: "https://github.com/shahzamansurani/ITWingSDK-iOS.git",
-        from: "1.0.0"
+        from: "1.6.6"
     )
 ]
 ```
@@ -43,7 +45,7 @@ Then add `.product(name: "ITWingSDK", package: "ITWingSDK-iOS")` to the target d
 ## CocoaPods
 
 ```ruby
-pod 'ITWingSDK', '~> 1.0'
+pod 'ITWingSDK', '~> 1.6.6'
 ```
 
 ## Required host configuration
@@ -246,11 +248,11 @@ The SDK supplies admin-managed VPN server data, categories, premium gating, ads,
 The package follows semantic versioning. To publish a release:
 
 ```bash
-git tag 1.0.0
-git push origin 1.0.0
+git tag 1.6.6
+git push origin 1.6.6
 ```
 
-Host apps can then select `1.0.0` or use the `from: "1.0.0"` dependency rule.
+Host apps can then select `1.6.6` or use the `from: "1.6.6"` dependency rule.
 
 See [MIGRATION.md](MIGRATION.md) when moving an existing host from the old
 local `ITWingAds` module. The old local SDK can remain in place for projects

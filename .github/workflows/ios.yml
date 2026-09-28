@@ -18,3 +18,10 @@ jobs:
           -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO
           build
+      - name: Run iOS SDK tests
+        run: >
+          xcodebuild
+          -scheme ITWingSDK
+          -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest'
+          CODE_SIGNING_ALLOWED=NO
+          test

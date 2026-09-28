@@ -2,6 +2,23 @@
 
 All notable changes to ITWingSDK are documented here.
 
+## 1.6.6 — IT Wing SDK v1.49 companion release candidate
+
+- Normalize supported ad component colors using the existing admin `app.colors` keys, including dedicated native and banner CTA colors and text colors.
+- Align the safe default CTA/accent color with Android when admin colors are absent or malformed.
+- Apply native and banner background/border presentation consistently to custom creatives where those fields are configured.
+- Use the existing admin `media_shimmer_base_color` and `media_shimmer_highlight_color` values for ad shimmer, with generic/fallback colors when unset.
+- Use the same normalized theme contract for fullscreen custom-ad text, badge, CTA, and background styling.
+- Resolve custom native advertiser/meta text through the same `native_meta_text_color` / `native_secondary_text_color` app-color path as real native ads.
+- Use one shared native card surface for real and custom creatives so their default gradient and configured solid background behavior cannot drift independently.
+- Cancel pending custom-ad fetches when their views leave the window; invalidate old requests on placement changes and ignore stale banner/native callbacks from replaced or detached views.
+- Ignore stale custom image/video readiness callbacks after a media view is reconfigured, preventing replaced creatives from becoming visible or recording readiness/impressions.
+- Register the reusable inline creative CTA handler once, preventing repeated renders from multiplying click events; validate all custom-ad click/video and SDK media URLs as HTTP(S).
+- Replace force-casts in media-library collection cell dequeue paths with graceful fallback cells.
+- Validate custom creative, SDK media-player, and cached-image URLs through one HTTP(S) validator; release replaced media players and avoid cache-directory force unwraps.
+- Load custom-ad images asynchronously with request/resource timeouts, a 12 MiB response cap, and ImageIO downsampling to a bounded pixel size; media fallback cache reads and JSON decoding also stay off the UI thread.
+- Keep existing Swift Package Manager product, deployment target, public API, and v1.48 host integration unchanged.
+
 ## 1.0.4
 
 - Fixed `ITWingPremiumView` active-plan content being compressed or cropped in compact host layouts.

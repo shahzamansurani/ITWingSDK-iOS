@@ -6,6 +6,7 @@ final class FullScreenAdCoordinator {
     static let shared = FullScreenAdCoordinator()
     private let lock = NSLock()
     private var owner: UUID?
+    private var lastEndedAt = Date.distantPast
 
     func tryBegin() -> UUID? {
         lock.lock()
@@ -19,7 +20,10 @@ final class FullScreenAdCoordinator {
     func end(_ token: UUID?) {
         guard let token else { return }
         lock.lock()
-        if owner == token { owner = nil }
+        if owner == token {
+            owner = nil
+            lastEndedAt = Date()
+        }
         lock.unlock()
     }
 
@@ -27,6 +31,12 @@ final class FullScreenAdCoordinator {
         lock.lock()
         defer { lock.unlock() }
         return owner != nil
+    }
+
+    func wasRecentlyActive(within interval: TimeInterval) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return owner != nil || Date().timeIntervalSince(lastEndedAt) >= 0 && Date().timeIntervalSince(lastEndedAt) < interval
     }
 }
 

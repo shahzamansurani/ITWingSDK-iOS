@@ -46,13 +46,14 @@ open class ITWingMediaPlayerView: UIView {
     }
 
     public func setMedia(_ item: ITWingMediaItem) {
-        url = URL(string: item.mediaUrl)
+        url = ITWingURLSafety.firstHTTPURL([item.mediaUrl])
         let event = item.mimeType?.hasPrefix("video/") == true ? "play" : "play"
         ITWingSDK.trackMediaEvent(kind: item.mimeType?.hasPrefix("video/") == true ? "videos" : "ringtones", itemId: item.id, eventType: event)
     }
 
     public func play() {
-        player?.play()
+        guard let player else { return }
+        player.play()
         playButton.setTitle("Pause", for: .normal)
     }
 
@@ -70,7 +71,11 @@ open class ITWingMediaPlayerView: UIView {
     }
 
     private func configurePlayer() {
+        player?.pause()
+        player = nil
         playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        playButton.setTitle("Play", for: .normal)
         guard let url else { return }
         let player = AVPlayer(url: url)
         let layer = AVPlayerLayer(player: player)

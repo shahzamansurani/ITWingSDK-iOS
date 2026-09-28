@@ -216,7 +216,8 @@ public struct AppConfig: Codable, Sendable {
         termsUrl = try values.decodeIfPresent(String.self, forKey: .termsUrl)
         disclaimerUrl = try values.decodeIfPresent(String.self, forKey: .disclaimerUrl)
         legal = try values.decodeIfPresent([String: LegalDocumentConfig].self, forKey: .legal) ?? [:]
-        colors = try values.decodeIfPresent([String: String].self, forKey: .colors) ?? [:]
+        let flexibleColors = try? values.decode([String: ITWingFlexibleStringValue].self, forKey: .colors)
+        colors = flexibleColors?.compactMapValues(\.value) ?? [:]
         splash = try values.decodeIfPresent(SplashConfig.self, forKey: .splash) ?? SplashConfig()
         loadingLottieUrl = try values.decodeIfPresent(String.self, forKey: .loadingLottieUrl)
         loadingAdTimeoutMs = (try? values.decode(Int.self, forKey: .loadingAdTimeoutMs))

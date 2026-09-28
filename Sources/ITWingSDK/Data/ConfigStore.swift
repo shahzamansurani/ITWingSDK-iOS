@@ -4,7 +4,8 @@ final class ConfigStore {
     private let url: URL
 
     init() {
-        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
         self.url = directory.appendingPathComponent("itwing-config.json")
     }
 
